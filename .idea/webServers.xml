@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="5c702fe0-801c-42b7-94ef-8a3dc05039bb" name="SZU_Face_EEG">
+        <fileTransfer rootFolder="/data0/xinyang/mapping/SZU_Face_EEG" accessType="SFTP" host="172.31.224.73" port="22003" sshConfigId="b93e78c7-7cf4-4970-9d64-ce201b6447fa" sshConfig="xinyang@172.31.224.73:22003 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
