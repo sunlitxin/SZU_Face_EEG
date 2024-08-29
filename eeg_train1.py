@@ -136,7 +136,7 @@ def find_edf_and_markers_files(base_path, file_prefix=None):
 
 
 def load_and_preprocess_data(edf_file_path, label_file_path):
-    edf_reader = MNEReader(filetype='edf', method='manual', length=500)
+    edf_reader = MNEReader(filetype='edf', method='manual', length=1500)
     stim, target_class = ziyan_read(label_file_path)
 
     # 将标签值减1，以使标签范围从0到49
@@ -185,7 +185,7 @@ def main():
     loss_name = 'CrossEntropy'
     model_name = args.model
 
-    n_timestep = 300
+    n_timestep = 1000
 
     file_prefix = args.prefix
 
@@ -255,7 +255,7 @@ def main():
 
         # 支持多GPU训练
         if torch.cuda.device_count() > 1:
-            device_ids = [0, 1, 2, 3, 4, 5]  # 例如使用 2 个 GPU
+            device_ids = [6,7]  # 例如使用 2 个 GPU
 
             # 将模型分配到指定的 GPU
             model = nn.DataParallel(model, device_ids=device_ids)
@@ -305,6 +305,8 @@ def main():
                 end_time = start_time + n_timestep
                 sliced_inputs = inputs[:, :, :, start_time:end_time]
                 optimizer.zero_grad()
+                print(f"inputs shape: {inputs.shape}")
+                print(f"sliced_inputs shape: {sliced_inputs.shape}")
                 outputs = model(sliced_inputs)
                 if loss_name == 'CrossEntropy':
                     loss = criterion(outputs, labels)

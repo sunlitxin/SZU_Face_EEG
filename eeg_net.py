@@ -15,10 +15,11 @@ class Conv2dWithConstraint(nn.Conv2d):
         return super().forward(x)
 
 class EEGNet(nn.Module):
-    def __init__(self, F1=8, F2=16, D=2, K1=64, K2=16, n_timesteps=500, n_electrodes=127, n_classes=50, dropout=0.5):
+    def __init__(self, F1=8, F2=16, D=2, K1=64, K2=16, n_timesteps=1500, n_electrodes=127, n_classes=50, dropout=0.5):
         super().__init__()
 
-        self.conv1 = nn.Conv2d(1, F1, (1, K1), padding=(0, K1 // 2), bias=False)
+        self.zoe1 = nn.ZeroPad2d((K1 // 2, K1 // 2 - 1, 0, 0))
+        self.conv1 = nn.Conv2d(1, F1, (1, K1), bias=False)
         self.bn1 = nn.BatchNorm2d(F1)
 
         self.conv2 = Conv2dWithConstraint(F1, F1 * D, (n_electrodes, 1), bias=False, groups=F1)
@@ -29,7 +30,8 @@ class EEGNet(nn.Module):
         self.pool1 = nn.AvgPool2d((1, 4))
         self.dropout1 = nn.Dropout(dropout)
 
-        self.conv3 = nn.Conv2d(F1 * D, F1 * D, (1, K2), bias=False, groups=F1 * D, padding=(0, K2 // 2))
+        self.zoe3 = nn.ZeroPad2d((K2 // 2, K2 // 2 - 1, 0, 0))
+        self.conv3 = nn.Conv2d(F1 * D, F1 * D, (1, K2), bias=False, groups=F1 * D)
         self.conv4 = nn.Conv2d(F1 * D, F2, 1, bias=False)
         self.bn3 = nn.BatchNorm2d(F2)
 
@@ -43,6 +45,7 @@ class EEGNet(nn.Module):
         self.fc = nn.Linear(F2 * (n_timesteps // 32), n_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.zoe1(x)
         x = self.conv1(x)
         x = self.bn1(x)
 
@@ -52,7 +55,7 @@ class EEGNet(nn.Module):
 
         x = self.pool1(x)
         x = self.dropout1(x)
-
+        x = self.zoe3(x)
         x = self.conv3(x)
         x = self.conv4(x)
         x = self.bn3(x)
@@ -62,6 +65,8 @@ class EEGNet(nn.Module):
         x = self.dropout2(x)
 
         x = self.flatten(x)
+        print("Shape of x after flattening:", x.shape)
+        print("Weight shape in self.fc:", self.fc.weight.shape)
         x = self.fc(x)
 
         return x
@@ -336,4 +341,16 @@ class classifier_CNN(nn.Module):
         x = x.contiguous().view(batch_size, -1)
         x = self.fc2(x)
         return x
+
+
+
+
+if __name__ == '__main__':
+    model = EEGNet()
+    x = torch.zeros(64,1,127,1500)
+    y = model(x)
+    print(y.shape)
+
+
+
 
