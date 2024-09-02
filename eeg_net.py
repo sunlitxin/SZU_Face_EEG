@@ -15,7 +15,7 @@ class Conv2dWithConstraint(nn.Conv2d):
         return super().forward(x)
 
 class EEGNet(nn.Module):
-    def __init__(self, F1=8, F2=16, D=2, K1=64, K2=16, n_timesteps=1500, n_electrodes=127, n_classes=50, dropout=0.5):
+    def __init__(self, F1=8, F2=16, D=2, K1=64, K2=16, n_timesteps=1000, n_electrodes=127, n_classes=50, dropout=0.5):
         super().__init__()
 
         self.zoe1 = nn.ZeroPad2d((K1 // 2, K1 // 2 - 1, 0, 0))
@@ -65,8 +65,6 @@ class EEGNet(nn.Module):
         x = self.dropout2(x)
 
         x = self.flatten(x)
-        print("Shape of x after flattening:", x.shape)
-        print("Weight shape in self.fc:", self.fc.weight.shape)
         x = self.fc(x)
 
         return x
@@ -347,7 +345,7 @@ class classifier_CNN(nn.Module):
 
 if __name__ == '__main__':
     model = EEGNet()
-    x = torch.zeros(64,1,127,1500)
+    x = torch.zeros(64,1,127,100)
     y = model(x)
     print(y.shape)
 

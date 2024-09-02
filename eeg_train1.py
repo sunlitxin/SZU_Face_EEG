@@ -24,12 +24,6 @@ torch.backends.cudnn.benchmark = False
 random.seed(seed)
 np.random.seed(seed)
 
-
-# def normalize_samples(x):
-#     mean = x.mean(axis=1, keepdims=True)
-#     std = x.std(axis=1, keepdims=True)
-#     x_normalized = (x - mean) / (std + 1e-6)
-#     return x_normalized
 def normalize_samples(x):
     mean = np.mean(x, axis=1, keepdims=True)
     std = np.std(x, axis=1, keepdims=True)
@@ -134,16 +128,28 @@ def find_edf_and_markers_files(base_path, file_prefix=None):
             }
     return edf_files
 
+def pad_last_array(x, n_timestep):
+    # 确保最后一个数组的形状为 (99, 127)
+    if x[-1].shape[0] != n_timestep and x[-1].shape[1] == 127:
+        # 获取前一个数组，用于补全
+        last_row = x[-1][-1:]
 
-def load_and_preprocess_data(edf_file_path, label_file_path):
-    edf_reader = MNEReader(filetype='edf', method='manual', length=1500)
+        # 用最后一行进行补全
+        padding = last_row
+
+        # 将补全后的数组重新赋值给最后一个元素
+        x[-1] = np.vstack((x[-1], padding))
+    return x
+def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
+    edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length)
     stim, target_class = ziyan_read(label_file_path)
 
     # 将标签值减1，以使标签范围从0到49
     target_class = [cls - 1 for cls in target_class]
 
     xx = edf_reader.get_set(file_path=edf_file_path, stim_list=stim)
-
+    if xx[-1].shape[0] != stim_length:
+        xx = pad_last_array(xx, stim_length)
     xx_np = np.array(xx)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
 
@@ -165,13 +171,16 @@ def load_and_preprocess_data(edf_file_path, label_file_path):
     return eeg_data_tensor, labels_tensor
 
 
-def setup_logging(model_name):
-    log_dir = os.path.join(model_name)
+def setup_logging(model_name, loss_name, n_timestep, datadirname):
+    log_dir_name = f'{model_name}_{loss_name}'
+    log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    log_filename = os.path.join(log_dir, f'{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}.log')  # Loss-Dataset-
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
     logging.info(f'Starting training with model {model_name}')
+    logging.info(f'Loss: {loss_name}')
+    logging.info('Datasets: xinyangnew4')
 
 
 def main():
@@ -182,22 +191,27 @@ def main():
     parser.add_argument('--prefix', type=str, default=None, help='File prefix to filter EEG data files')
     args = parser.parse_args()
     # loss_name = 'XYLoss'
-    loss_name = 'CrossEntropy'
+    loss_name = 'CELoss'
     model_name = args.model
 
-    n_timestep = 1000
+    n_timestep = 2000
 
     file_prefix = args.prefix
 
-    # Setup logging
-    setup_logging(model_name)
 
     # Base path
+    base_path0 = '/data0/xinyang/SZU_Face_EEG/'
+    datadirname = 'eeg_nv'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
+    base_path = os.path.join(base_path0, datadirname)
     # base_path = '/data0/xinyang/SZU_Face_EEG/small'#
-    base_path = '/data0/xinyang/SZU_Face_EEG/small_eeg'
+    # base_path = '/data0/xinyang/SZU_Face_EEG/small_eeg'
     edf_files = find_edf_and_markers_files(base_path, file_prefix)
+
+    # Setup logging
+    setup_logging(model_name, loss_name, n_timestep, datadirname)
+
 
     all_eeg_data = []
     all_labels = []
@@ -211,7 +225,7 @@ def main():
             logging.info(f"Markers file for {edf_file_path} does not exist. Skipping.")
             continue
 
-        eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path)
+        eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep)
         print('-------------------')
 
         if eeg_data is None or labels is None:
@@ -255,7 +269,7 @@ def main():
 
         # 支持多GPU训练
         if torch.cuda.device_count() > 1:
-            device_ids = [6,7]  # 例如使用 2 个 GPU
+            device_ids = [0, 1, 2, 3, 4, 5, 6, 7]  # 例如使用 2 个 GPU
 
             # 将模型分配到指定的 GPU
             model = nn.DataParallel(model, device_ids=device_ids)
@@ -277,7 +291,7 @@ def main():
                 t=0.2,
                 errsum=0.3  # (1-φ)^2 * cos(θ) noise决定了φ的上限
             ).train().to(device)
-        elif loss_name == 'CrossEntropy':
+        elif loss_name == 'CELoss':
             print('')
         else:
             raise ValueError(f"Unknown loss: {loss_name}")
@@ -300,15 +314,13 @@ def main():
             total = 0
             for inputs, labels in train_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
-                # 在时间维度切片
-                start_time = 0
-                end_time = start_time + n_timestep
-                sliced_inputs = inputs[:, :, :, start_time:end_time]
+                # # 在时间维度切片
+                # start_time = 0
+                # end_time = start_time + n_timestep
+                # sliced_inputs = inputs[:, :, :, start_time:end_time]
                 optimizer.zero_grad()
-                print(f"inputs shape: {inputs.shape}")
-                print(f"sliced_inputs shape: {sliced_inputs.shape}")
-                outputs = model(sliced_inputs)
-                if loss_name == 'CrossEntropy':
+                outputs = model(inputs)
+                if loss_name == 'CELoss':
                     loss = criterion(outputs, labels)
                 else:
                     output = margin_loss(outputs, labels)
@@ -330,11 +342,11 @@ def main():
             with torch.no_grad():
                 for inputs, labels in test_loader:
                     inputs, labels = inputs.to(device), labels.to(device)
-                    # 在时间维度切片
-                    start_time = 0
-                    end_time = start_time + n_timestep
-                    sliced_inputs = inputs[:, :, :, start_time:end_time]
-                    outputs = model(sliced_inputs)
+                    # # 在时间维度切片
+                    # start_time = 0
+                    # end_time = start_time + n_timestep
+                    # sliced_inputs = inputs[:, :, :, start_time:end_time]
+                    outputs = model(inputs)
                     _, predicted = torch.max(outputs, 1)
                     total_test += labels.size(0)
                     correct_test += (predicted == labels).sum().item()
@@ -351,6 +363,12 @@ def main():
                   f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}")
 
             best_acc_list.append(best_acc)
+        # 在每个折叠结束后，手动释放内存
+        del train_dataset, test_dataset, train_loader, test_loader
+        model.to('cpu')
+        all_eeg_data = all_eeg_data.to('cpu')
+        all_labels = all_labels.to('cpu')
+        torch.cuda.empty_cache()
 
     if invalid_files:
         logging.info("Files skipped due to invalid channel size:")
