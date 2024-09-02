@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, TensorDataset, Subset
 import mne
 from sklearn.model_selection import KFold
@@ -250,6 +251,8 @@ def main():
     kfold = KFold(n_splits=5, shuffle=True, random_state=42)
     num_epochs = 300
 
+    scaler = GradScaler()
+
     for fold, (train_idx, test_idx) in enumerate(kfold.split(all_eeg_data)):
         logging.info(f"FOLD {fold + 1}")
 
@@ -321,14 +324,17 @@ def main():
                 # end_time = start_time + n_timestep
                 # sliced_inputs = inputs[:, :, :, start_time:end_time]
                 optimizer.zero_grad()
-                outputs = model(inputs)
-                if loss_name == 'CELoss':
-                    loss = criterion(outputs, labels)
-                else:
-                    output = margin_loss(outputs, labels)
-                    loss = criterion(output, labels)
-                loss.backward()
-                optimizer.step()
+                with autocast():
+                    outputs = model(inputs)
+                    if loss_name == 'CELoss':
+                        loss = criterion(outputs, labels)
+                    else:
+                        output = margin_loss(outputs, labels)
+                        loss = criterion(output, labels)
+
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
                 running_loss += loss.item()
                 _, predicted = torch.max(outputs, 1)
@@ -348,7 +354,8 @@ def main():
                     # start_time = 0
                     # end_time = start_time + n_timestep
                     # sliced_inputs = inputs[:, :, :, start_time:end_time]
-                    outputs = model(inputs)
+                    with autocast():
+                        outputs = model(inputs)
                     _, predicted = torch.max(outputs, 1)
                     total_test += labels.size(0)
                     correct_test += (predicted == labels).sum().item()
