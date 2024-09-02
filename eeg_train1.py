@@ -269,7 +269,7 @@ def main():
 
         # 支持多GPU训练
         if torch.cuda.device_count() > 1:
-            device_ids = [0, 1, 2, 3, 4, 5, 6, 7]  # 例如使用 2 个 GPU
+            device_ids = [0, 1, 2, 3, 4, 5, 6, 7]   # 例如使用 2 个 GPU
 
             # 将模型分配到指定的 GPU
             model = nn.DataParallel(model, device_ids=device_ids)
@@ -363,7 +363,8 @@ def main():
 
             logging.info(
                 f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
-                f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}"
+                f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
+                f"Epoch Duration: {epoch_duration:.2f} seconds"  # 记录时间
             )
             print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
                   f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "

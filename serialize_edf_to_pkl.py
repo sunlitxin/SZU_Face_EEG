@@ -23,37 +23,6 @@ def save_to_pkl(data, labels, output_file_path):
         pickle.dump((data, labels), f)
     print(f"Data and labels saved to {output_file_path}")
 
-# def load_and_preprocess_data(edf_file_path, label_file_path, stim_length, output_pkl_path):
-#     edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length)
-#     stim, target_class = ziyan_read(label_file_path)
-#
-#     # 将标签值减1，以使标签范围从0到49
-#     target_class = [cls - 1 for cls in target_class]
-#
-#     xx = edf_reader.get_set(file_path=edf_file_path, stim_list=stim)
-#
-#     xx_np = np.array(xx)
-#     print(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
-#
-#     # 如果通道数不是127，跳过
-#     if xx_np.shape[2] != 127:
-#         print(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
-#         return None, None
-#
-#     xx_normalized = normalize_samples(xx_np)
-#     print(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
-#
-#     eeg_data = np.transpose(xx_normalized, (0, 2, 1))
-#     eeg_data = eeg_data[:, np.newaxis, :, :]
-#     print(f"{os.path.basename(edf_file_path)} - eeg_data.shape= {eeg_data.shape}")
-#
-#     eeg_data_tensor = torch.tensor(eeg_data, dtype=torch.float32)
-#     labels_tensor = torch.tensor(target_class, dtype=torch.long)
-#
-#     # 保存为PKL格式
-#     save_to_pkl(eeg_data_tensor, labels_tensor, output_pkl_path)
-#
-#     return eeg_data_tensor, labels_tensor
 def pad_last_array(x, n_timestep):
     # 确保最后一个数组的形状为 (99, 127)
     if x[-1].shape[0] != n_timestep and x[-1].shape[1] == 127:
@@ -136,8 +105,8 @@ def parallel_process_files(edf_files, label_file_path, stim_length, output_pkl_d
 if __name__ == "__main__":
 
     # 设置参数
-    sub_stim_length = 400
-    slice_set_nums = 5
+    sub_stim_length = 2000
+    slice_set_nums = 1
     stim_length = sub_stim_length * slice_set_nums
     # Base path
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
