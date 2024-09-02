@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 import argparse
 import random
-
+import time  # 添加时间模块
 from Criterions import NewCrossEntropy
 from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet
 from losses import XYLoss, ArcFace
@@ -180,7 +180,7 @@ def setup_logging(model_name, loss_name, n_timestep, datadirname):
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
     logging.info(f'Starting training with model {model_name}')
     logging.info(f'Loss: {loss_name}')
-    logging.info('Datasets: xinyangnew4')
+    logging.info(f'Datasets: {datadirname}')
 
 
 def main():
@@ -201,7 +201,7 @@ def main():
 
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'eeg_nv'
+    datadirname = 'small'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
@@ -308,6 +308,8 @@ def main():
         best_epoch = 0
         best_acc_list = []
         for epoch in range(num_epochs):
+            epoch_start_time = time.time()  # 记录开始时间
+
             model.train()
             running_loss = 0.0
             correct = 0
@@ -355,12 +357,17 @@ def main():
                 if test_acc > best_acc:
                     best_acc = test_acc
                     best_epoch = epoch
+
+            epoch_end_time = time.time()  # 记录结束时间
+            epoch_duration = epoch_end_time - epoch_start_time  # 计算持续时间
+
             logging.info(
                 f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
                 f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}"
             )
             print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
-                  f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}")
+                  f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
+                  f"Epoch Duration: {epoch_duration:.2f} seconds")  # 显示时间
 
             best_acc_list.append(best_acc)
         # 在每个折叠结束后，手动释放内存
