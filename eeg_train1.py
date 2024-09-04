@@ -195,14 +195,14 @@ def main():
     loss_name = 'CELoss'
     model_name = args.model
 
-    n_timestep = 2000
+    n_timestep = 500
 
     file_prefix = args.prefix
 
 
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'small'
+    datadirname = 'eeg_xy'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
@@ -255,6 +255,7 @@ def main():
 
     for fold, (train_idx, test_idx) in enumerate(kfold.split(all_eeg_data)):
         logging.info(f"FOLD {fold + 1}")
+        print(f"FOLD {fold + 1}")
 
         # 实例化模型
         if model_name == 'EEGNet':

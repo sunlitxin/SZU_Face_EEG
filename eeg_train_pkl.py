@@ -1,6 +1,6 @@
 import os
 import pickle
-
+import re
 import numpy as np
 import torch
 import torch.nn as nn
@@ -219,14 +219,20 @@ def main():
     loss_name = 'CELoss'
     model_name = args.model
 
-    n_timestep = 2000
+    n_timestep = 500
 
     file_prefix = args.prefix
 
 
     # Base path
-    base_path0 = '/data0/xinyang/SZU_Face_EEG/small/'
-    datadirname = 'pkl_2000X1'
+    base_path0 = '/data0/xinyang/SZU_Face_EEG/New_FaceEEG/'
+    datadirname = 'pkl_500X1'
+
+    # 使用正则表达式匹配第一个出现的数字序列
+    match = re.search(r'\d+', datadirname)
+    # 提取匹配到的数字并转换为整数
+    if match:
+        n_timestep = int(match.group())
 
     base_path = os.path.join(base_path0, datadirname)
     # base_path = '/data0/xinyang/SZU_Face_EEG/small_eeg'
@@ -255,6 +261,7 @@ def main():
 
     for fold, (train_idx, test_idx) in enumerate(kfold.split(all_eeg_data)):
         logging.info(f"FOLD {fold + 1}")
+        print(f"FOLD {fold + 1}")
 
         # 实例化模型
         if model_name == 'EEGNet':

@@ -1,15 +1,13 @@
 import os
-import pickle
-
 import numpy as np
 import torch
 from joblib import Parallel, delayed
 from eeg_train1 import MNEReader, ziyan_read, load_and_preprocess_data, find_edf_and_markers_files, normalize_samples
 import einops
+import h5py
 from tqdm import tqdm
 
-## Usage：此文件是将edf读取为pkl文件，可以通过调节参数 stim_length 和 slice_set_nums 分别选择读取edf的 time-length以及对 time-length进行几等分的切分
-
+## Usage：此文件是将edf读取为hdf5文件，可以通过调节参数stim_length 和 slice_set_nums分别选择读取edf的 time-length以及对 time-length进行几等分的切分
 
 def trial_average(eeg, axis=0):
     #  [1000, 127]
@@ -17,10 +15,10 @@ def trial_average(eeg, axis=0):
     std = np.std(eeg, axis=axis)
     return (eeg - ave) / std
 
-
-def save_to_pkl(data, labels, output_file_path):
-    with open(output_file_path, 'wb') as f:
-        pickle.dump((data, labels), f)
+def save_to_hdf5(data, labels, output_file_path, segment_index):
+    with h5py.File(output_file_path, 'a') as f:
+        f.create_dataset(f'data_segment_{segment_index}', data=data.numpy(), compression='gzip')
+        f.create_dataset(f'labels_segment_{segment_index}', data=labels.numpy(), compression='gzip')
     print(f"Data and labels saved to {output_file_path}")
 
 def pad_last_array(x, n_timestep):
@@ -36,7 +34,7 @@ def pad_last_array(x, n_timestep):
         x[-1] = np.vstack((x[-1], padding))
     return x
 
-def load_and_preprocess_data(edf_file_path, label_file_path, stim_length, output_pkl_base_path, slice_set_nums):
+def load_and_preprocess_data(edf_file_path, label_file_path, stim_length, output_hdf5_base_path, slice_set_nums):
     edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length)
     stim, target_class = ziyan_read(label_file_path)
 
@@ -55,9 +53,8 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length, output
         print(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
         return None, None
 
-    #划分为多个subsets
+    # 划分为多个subsets
     segment_length = stim_length // slice_set_nums
-    # 划分数据为4段
 
     for i in range(slice_set_nums):
         start_idx = i * segment_length
@@ -79,49 +76,45 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length, output
         print(f"eeg_data_tensor Segment {i + 1} shape: {eeg_data_tensor.shape}")
         print(f"labels_tensor Segment {i + 1} to {labels_tensor.shape}")
 
-        base_path_without_ext = os.path.splitext(output_pkl_base_path)[0]
+        base_path_without_ext = os.path.splitext(output_hdf5_base_path)[0]
         # 生成输出文件路径（添加段编号）
-        output_pkl_path = f"{base_path_without_ext}_segment_{i+1}.pkl"
+        output_hdf5_path = f"{base_path_without_ext}.h5"
 
-        # 保存为PKL格式
-        save_to_pkl(eeg_data_tensor, labels_tensor, output_pkl_path)
-        print(f"Saved Segment {i+1} to {output_pkl_path}")
+        # 保存为HDF5格式
+        save_to_hdf5(eeg_data_tensor, labels_tensor, output_hdf5_path, i + 1)
+        print(f"Saved Segment {i+1} to {output_hdf5_path}")
 
     return eeg_data_tensor, labels_tensor
 
-def process_file(edf_file_path, label_file_path, stim_length, output_pkl_dir, slice_set_nums):
-    output_pkl_path = os.path.join(output_pkl_dir, os.path.basename(edf_file_path).replace('.edf', '.pkl'))
-    return load_and_preprocess_data(edf_file_path, label_file_path, stim_length, output_pkl_path, slice_set_nums)
-
+def process_file(edf_file_path, label_file_path, stim_length, output_hdf5_dir, slice_set_nums):
+    output_hdf5_path = os.path.join(output_hdf5_dir, os.path.basename(edf_file_path).replace('.edf', '.h5'))
+    return load_and_preprocess_data(edf_file_path, label_file_path, stim_length, output_hdf5_path, slice_set_nums)
 
 # 并行处理多个文件
-def parallel_process_files(edf_files, label_file_path, stim_length, output_pkl_dir, slice_set_nums, n_jobs=-1):
+def parallel_process_files(edf_files, label_file_path, stim_length, output_hdf5_dir, slice_set_nums, n_jobs=-1):
     Parallel(n_jobs=n_jobs)(
-        delayed(process_file)(edf_file, label_file_path, stim_length, output_pkl_dir, slice_set_nums)
+        delayed(process_file)(edf_file, label_file_path, stim_length, output_hdf5_dir, slice_set_nums)
         for edf_file in edf_files
     )
-
 
 if __name__ == "__main__":
 
     # 设置参数
-    sub_stim_length = 500
+    sub_stim_length = 2000
     slice_set_nums = 1
     stim_length = sub_stim_length * slice_set_nums
-    # Base path
-    # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
-    base_path = '/data0/xinyang/SZU_Face_EEG/New_FaceEEG'
-    # base_path = '/data0/xinyang/SZU_Face_EEG/small'
-    # base_path = '/data0/xinyang/SZU_Face_EEG/small_eeg'
 
-    output_pkl_dir = os.path.join(base_path, f"pkl_{sub_stim_length}X{slice_set_nums}")
+    # Base path
+    base_path = '/data0/xinyang/SZU_Face_EEG/eeg_nv/11'
+
+    output_hdf5_dir = os.path.join(base_path, f"hdf5_{sub_stim_length}X{slice_set_nums}")
 
     # 查找EDF和对应的标记文件
     file_prefix = None
     edf_files = find_edf_and_markers_files(base_path, file_prefix)
 
     # 确保输出目录存在
-    os.makedirs(output_pkl_dir, exist_ok=True)
+    os.makedirs(output_hdf5_dir, exist_ok=True)
 
     # 处理每个EDF文件和标记文件对
     for base_name, files in edf_files.items():
@@ -134,8 +127,4 @@ if __name__ == "__main__":
             continue
 
         # 并行处理EDF文件
-        parallel_process_files([edf_file_path], label_file_path, stim_length, output_pkl_dir, slice_set_nums, n_jobs=1)
-
-
-
-
+        parallel_process_files([edf_file_path], label_file_path, stim_length, output_hdf5_dir, slice_set_nums, n_jobs=1)
