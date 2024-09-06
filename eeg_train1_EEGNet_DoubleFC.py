@@ -13,7 +13,8 @@ import argparse
 import random
 import time  # 添加时间模块
 from Criterions import NewCrossEntropy
-from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet
+from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet, \
+    EEGNet_Double_FC
 from losses import XYLoss, ArcFace
 
 seed = 1234
@@ -154,10 +155,10 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
     xx_np = np.array(xx)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
 
-    # # 如果通道数不是127，跳过
-    # if xx_np.shape[2] != 127:
-    #     logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
-    #     return None, None
+    # 如果通道数不是127，跳过
+    if xx_np.shape[2] != 127:
+        logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
+        return None, None
 
     xx_normalized = normalize_samples(xx_np)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
@@ -172,13 +173,16 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
     return eeg_data_tensor, labels_tensor
 
 
+
 def setup_logging(model_name, loss_name, n_timestep, datadirname):
     log_dir_name = f'{model_name}_{loss_name}'
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}.log')  # Loss-Dataset-
+    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-EEGNet_DoubleFC.log')  # Loss-Dataset-
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
+    logging.info(f'recode_name:{log_filename}')
+    logging.info('train by eeg_train1_EEGNet_DoubleFC.py')
     logging.info(f'Starting training with model {model_name}')
     logging.info(f'Loss: {loss_name}')
     logging.info(f'Datasets: {datadirname}')
@@ -191,18 +195,31 @@ def main():
                         default='EEGNet')
     parser.add_argument('--prefix', type=str, default=None, help='File prefix to filter EEG data files')
     args = parser.parse_args()
+
+    mapping = {
+        0: 0, 1: 0, 2: 0, 3: 1, 4: 1,
+        5: 1, 6: 0, 7: 0, 8: 1, 9: 1,
+        10: 0, 11: 0, 12: 1, 13: 1, 14: 0,
+        15: 1, 16: 0, 17: 1, 18: 1, 19: 0,
+        20: 1, 21: 0, 22: 1, 23: 0, 24: 1,
+        25: 1, 26: 1, 27: 1, 28: 0, 29: 1,
+        30: 0, 31: 0, 32: 1, 33: 0, 34: 0,
+        35: 1, 36: 1, 37: 0, 38: 1, 39: 0,
+        40: 1, 41: 0, 42: 0, 43: 1, 44: 0,
+        45: 0, 46: 0, 47: 0, 48: 1, 49: 1
+    }
+
     # loss_name = 'XYLoss'
     loss_name = 'CELoss'
-    model_name = args.model
+    model_name = 'EEGNet_DoubleFC'
 
-    n_timestep = 500
 
     file_prefix = args.prefix
 
-
+    n_timestep = 500
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'pudu_0'
+    datadirname = 'New_FaceEEG'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
@@ -259,7 +276,7 @@ def main():
 
         # 实例化模型
         if model_name == 'EEGNet':
-            model = EEGNet(n_timesteps=n_timestep, n_electrodes=117, n_classes=46)
+            model = EEGNet(n_timesteps=n_timestep, n_electrodes=127, n_classes=50)
         elif model_name == 'classifier_EEGNet':
             model = classifier_EEGNet(temporal=500)
         elif model_name == 'classifier_SyncNet':
@@ -268,6 +285,8 @@ def main():
             model = classifier_CNN(num_points=500, n_classes=50)
         elif model_name == 'classifier_EEGChannelNet':
             model = classifier_EEGChannelNet(temporal=500)
+        elif model_name == 'EEGNet_DoubleFC':
+            model = EEGNet_Double_FC(n_timesteps=n_timestep, n_electrodes=127, n_classes1=50, n_classes2=2)
         else:
             raise ValueError(f"Unknown model: {model_name}")
 
@@ -280,27 +299,8 @@ def main():
 
         # 将模型移动到 GPU 上
         model = model.to(device)
-        if loss_name == 'ArcFace':
-            margin_loss = ArcFace(
-                margin=0.0
-            )
-        elif loss_name == 'XYLoss':
-            # robustface
-            margin_loss = XYLoss(
-                50,
-                embedding_size=50,
-                s=64,
-                m2=0.9,  # for arcface margin
-                m3=-0.1,  # for xyloss
-                t=0.2,
-                errsum=0.3  # (1-φ)^2 * cos(θ) noise决定了φ的上限
-            ).train().to(device)
-        elif loss_name == 'CELoss':
-            print('')
-        else:
-            raise ValueError(f"Unknown loss: {loss_name}")
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        optimizer = optim.Adam(model.parameters(), lr=0.001) #0.00005
 
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])
@@ -316,67 +316,79 @@ def main():
 
             model.train()
             running_loss = 0.0
-            correct = 0
+            correct1 = 0
+            correct2 = 0
             total = 0
             for inputs, labels in train_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
-                # # 在时间维度切片
-                # start_time = 0
-                # end_time = start_time + n_timestep
-                # sliced_inputs = inputs[:, :, :, start_time:end_time]
+                label_sex = torch.tensor([mapping[label.item()] for label in labels], device=labels.device)
+                inputs, labels, label_sex = inputs.to(device), labels.to(device), label_sex.to(device)
                 optimizer.zero_grad()
+
                 with autocast():
-                    outputs = model(inputs)
-                    if loss_name == 'CELoss':
-                        loss = criterion(outputs, labels)
-                    else:
-                        output = margin_loss(outputs, labels)
-                        loss = criterion(output, labels)
+                    outputs_id, outputs_sex = model(inputs)
+                    loss1 = criterion(outputs_id, labels)
+                    loss2 = criterion(outputs_sex, label_sex)
+                    loss = loss1 + loss2
 
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                    scaler.scale(loss).backward()
+                    # 更新参数
+                    scaler.step(optimizer)
+                    scaler.update()
 
-                running_loss += loss.item()
-                _, predicted = torch.max(outputs, 1)
+                running_loss += loss1.item() + loss2.item()
+                _, predicted1 = torch.max(outputs_id, 1)
+                _, predicted2 = torch.max(outputs_sex, 1)
                 total += labels.size(0)
-                correct += (predicted == labels).sum().item()
+                correct1 += (predicted1 == labels).sum().item()
+                correct2 += (predicted2 == label_sex).sum().item()
 
             epoch_loss = running_loss / len(train_loader)
-            epoch_acc = 100 * correct / total
+            epoch_acc1 = 100 * correct1 / total
+            epoch_acc2 = 100 * correct2 / total
 
             model.eval()
-            correct_test = 0
+            correct_test1 = 0
+            correct_test2 = 0
             total_test = 0
+
             with torch.no_grad():
                 for inputs, labels in test_loader:
                     inputs, labels = inputs.to(device), labels.to(device)
-                    # # 在时间维度切片
-                    # start_time = 0
-                    # end_time = start_time + n_timestep
-                    # sliced_inputs = inputs[:, :, :, start_time:end_time]
-                    with autocast():
-                        outputs = model(inputs)
-                    _, predicted = torch.max(outputs, 1)
-                    total_test += labels.size(0)
-                    correct_test += (predicted == labels).sum().item()
-                test_acc = 100 * correct_test / total_test
+                    label_sex = torch.tensor([mapping[label.item()] for label in labels], device=labels.device)
+                    inputs, labels, label_sex = inputs.to(device), labels.to(device), label_sex.to(device)
 
-                if test_acc > best_acc:
-                    best_acc = test_acc
+                    with autocast():
+                        outputs_id, outputs_sex = model(inputs)
+
+                    _, predicted_test1 = torch.max(outputs_id, 1)
+                    _, predicted_test2 = torch.max(outputs_sex, 1)
+                    total_test += labels.size(0)
+                    correct_test1 += (predicted_test1 == labels).sum().item()
+                    correct_test2 += (predicted_test2 == label_sex).sum().item()
+
+                test_acc1 = 100 * correct_test1 / total_test
+                test_acc2 = 100 * correct_test2 / total_test
+
+                if test_acc1 > best_acc:
+                    best_acc = test_acc1
                     best_epoch = epoch
 
             epoch_end_time = time.time()  # 记录结束时间
             epoch_duration = epoch_end_time - epoch_start_time  # 计算持续时间
 
             logging.info(
-                f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
-                f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
-                f"Epoch Duration: {epoch_duration:.2f} seconds"  # 记录时间
+                f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy (Model1): {epoch_acc1:.2f}%, "
+                f"Train Accuracy (Model2): {epoch_acc2:.2f}%, Test Accuracy (Model1): {test_acc1:.2f}%, "
+                f"Test Accuracy (Model2): {test_acc2:.2f}%, best_acc (Model1): {best_acc:.2f}%, "
+                f"best_epoch: {best_epoch + 1}, Epoch Duration: {epoch_duration:.2f} seconds"
             )
-            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
-                  f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
-                  f"Epoch Duration: {epoch_duration:.2f} seconds")  # 显示时间
+            print(
+                f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy (Model1): {epoch_acc1:.2f}%, "
+                f"Train Accuracy (Model2): {epoch_acc2:.2f}%, Test Accuracy (Model1): {test_acc1:.2f}%, "
+                f"Test Accuracy (Model2): {test_acc2:.2f}%, best_acc (Model1): {best_acc:.2f}%, "
+                f"best_epoch: {best_epoch + 1}, Epoch Duration: {epoch_duration:.2f} seconds"
+            )
 
             best_acc_list.append(best_acc)
         # # 在每个折叠结束后，手动释放内存

@@ -5,13 +5,16 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, TensorDataset, Subset
+from torch.utils.data.distributed import DistributedSampler
 import mne
 from sklearn.model_selection import KFold
 import logging
 from datetime import datetime
 import argparse
 import random
-import time  # 添加时间模块
+import time
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from Criterions import NewCrossEntropy
 from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet
 from losses import XYLoss, ArcFace
@@ -25,12 +28,30 @@ torch.backends.cudnn.benchmark = False
 random.seed(seed)
 np.random.seed(seed)
 
+
+
+def setup_ddp():
+    # 初始化分布式训练
+    dist.init_process_group(backend='nccl')
+    local_rank = torch.distributed.get_rank()
+    torch.cuda.set_device(local_rank)
+    device = torch.device(f'cuda:{local_rank}')
+    return device, local_rank
+
+def cleanup_ddp():
+    dist.destroy_process_group()
+
 def normalize_samples(x):
     mean = np.mean(x, axis=1, keepdims=True)
     std = np.std(x, axis=1, keepdims=True)
     x_normalized = (x - mean) / (std + 1e-6)
     return x_normalized
 
+def normalize_samples(x):
+    mean = np.mean(x, axis=1, keepdims=True)
+    std = np.std(x, axis=1, keepdims=True)
+    x_normalized = (x - mean) / (std + 1e-6)
+    return x_normalized
 
 class MNEReader(object):
     def __init__(self, filetype='edf', method='stim', resample=None, length=500, exclude=(), stim_channel='auto',
@@ -103,7 +124,6 @@ class MNEReader(object):
         del raw, epochs, events
         return stim_epochs.get_data().transpose(0, 2, 1)
 
-
 def ziyan_read(file_path):
     with open(file_path) as f:
         stim = []
@@ -116,7 +136,6 @@ def ziyan_read(file_path):
                 stim.append(time)
                 target_class.append(classes)
     return stim, target_class
-
 
 def find_edf_and_markers_files(base_path, file_prefix=None):
     edf_files = {}
@@ -141,6 +160,7 @@ def pad_last_array(x, n_timestep):
         # 将补全后的数组重新赋值给最后一个元素
         x[-1] = np.vstack((x[-1], padding))
     return x
+
 def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
     edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length)
     stim, target_class = ziyan_read(label_file_path)
@@ -154,10 +174,10 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
     xx_np = np.array(xx)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
 
-    # # 如果通道数不是127，跳过
-    # if xx_np.shape[2] != 127:
-    #     logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
-    #     return None, None
+    # 如果通道数不是127，跳过
+    if xx_np.shape[2] != 127:
+        logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
+        return None, None
 
     xx_normalized = normalize_samples(xx_np)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
@@ -171,38 +191,39 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
 
     return eeg_data_tensor, labels_tensor
 
-
 def setup_logging(model_name, loss_name, n_timestep, datadirname):
     log_dir_name = f'{model_name}_{loss_name}'
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}.log')  # Loss-Dataset-
+    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-origin.log')  # Loss-Dataset-
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
+    logging.info(f'recode_name:{log_filename}')
+    logging.info('train by eeg_train2_origin.py')
     logging.info(f'Starting training with model {model_name}')
     logging.info(f'Loss: {loss_name}')
     logging.info(f'Datasets: {datadirname}')
 
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str,
-                        help='Model to use: EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet',
-                        default='EEGNet')
+    parser.add_argument('--model', type=str, default='EEGNet')
     parser.add_argument('--prefix', type=str, default=None, help='File prefix to filter EEG data files')
+    parser.add_argument('--local_rank', type=int, default=-1, help='Local rank passed from distributed launcher')
     args = parser.parse_args()
+
+    device, local_rank = setup_ddp()
+
     # loss_name = 'XYLoss'
     loss_name = 'CELoss'
+    optims = 'Adam'
+    # optims = 'AdamW'
     model_name = args.model
-
-    n_timestep = 500
-
     file_prefix = args.prefix
-
+    n_timestep = 500
 
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'pudu_0'
+    datadirname = 'New_FaceEEG'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
@@ -227,7 +248,6 @@ def main():
             continue
 
         eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep)
-        print('-------------------')
 
         if eeg_data is None or labels is None:
             invalid_files.append(edf_file_path)
@@ -243,23 +263,22 @@ def main():
     all_eeg_data = torch.cat(all_eeg_data)
     all_labels = torch.cat(all_labels)
 
-    # 将数据移到 GPU
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    all_eeg_data = all_eeg_data.to(device)
-    all_labels = all_labels.to(device)
+    if local_rank == 0:
+        print('---------finished load and preprocess data----------')
 
     kfold = KFold(n_splits=5, shuffle=True, random_state=42)
     num_epochs = 300
-
     scaler = GradScaler()
 
     for fold, (train_idx, test_idx) in enumerate(kfold.split(all_eeg_data)):
-        logging.info(f"FOLD {fold + 1}")
-        print(f"FOLD {fold + 1}")
+
+        if local_rank == 0:
+            logging.info(f"FOLD {fold + 1}")
+            print(f"FOLD {fold + 1}")
 
         # 实例化模型
         if model_name == 'EEGNet':
-            model = EEGNet(n_timesteps=n_timestep, n_electrodes=117, n_classes=46)
+            model = EEGNet(n_timesteps=n_timestep, n_electrodes=127, n_classes=50)
         elif model_name == 'classifier_EEGNet':
             model = classifier_EEGNet(temporal=500)
         elif model_name == 'classifier_SyncNet':
@@ -271,18 +290,12 @@ def main():
         else:
             raise ValueError(f"Unknown model: {model_name}")
 
-        # 支持多GPU训练
-        if torch.cuda.device_count() > 1:
-            device_ids = [0, 1, 2, 3, 4, 5, 6, 7]   # 例如使用 2 个 GPU
-
-            # 将模型分配到指定的 GPU
-            model = nn.DataParallel(model, device_ids=device_ids)
-
-        # 将模型移动到 GPU 上
         model = model.to(device)
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+
         if loss_name == 'ArcFace':
             margin_loss = ArcFace(
-                margin=0.0
+                margin=0.5
             )
         elif loss_name == 'XYLoss':
             # robustface
@@ -299,32 +312,40 @@ def main():
             print('')
         else:
             raise ValueError(f"Unknown loss: {loss_name}")
+
+
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        if optims == 'Adam':
+            optimizer = optim.Adam(model.parameters(), lr=0.001)
+        elif optims == 'AdamW':
+            optimizer = optim.AdamW(model.parameters(), lr=0.0001/2)
 
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])
 
-        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+        # 使用分布式采样器
+        train_sampler = DistributedSampler(train_dataset)
+        test_sampler = DistributedSampler(test_dataset)
+
+        train_loader = DataLoader(train_dataset, batch_size=32, sampler=train_sampler)
+        test_loader = DataLoader(test_dataset, batch_size=32, sampler=test_sampler)
 
         best_acc = 0.0
         best_epoch = 0
-        best_acc_list = []
+
         for epoch in range(num_epochs):
+
             epoch_start_time = time.time()  # 记录开始时间
 
             model.train()
-            running_loss = 0.0
-            correct = 0
-            total = 0
+            running_loss = torch.tensor(0.0, device=device)
+            correct = torch.tensor(0, device=device)
+            total = torch.tensor(0, device=device)
+
             for inputs, labels in train_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
-                # # 在时间维度切片
-                # start_time = 0
-                # end_time = start_time + n_timestep
-                # sliced_inputs = inputs[:, :, :, start_time:end_time]
                 optimizer.zero_grad()
+
                 with autocast():
                     outputs = model(inputs)
                     if loss_name == 'CELoss':
@@ -337,59 +358,64 @@ def main():
                 scaler.step(optimizer)
                 scaler.update()
 
-                running_loss += loss.item()
+                # running_loss += loss.item()
+                running_loss += loss.item() * inputs.size(0)
                 _, predicted = torch.max(outputs, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
 
-            epoch_loss = running_loss / len(train_loader)
-            epoch_acc = 100 * correct / total
+            # 汇总并计算平均损失和准确率
+            dist.all_reduce(running_loss, op=dist.ReduceOp.SUM)
+            dist.all_reduce(correct, op=dist.ReduceOp.SUM)
+            dist.all_reduce(total, op=dist.ReduceOp.SUM)
+
+            epoch_loss = running_loss / total
+            epoch_acc = correct.float() / total * 100
 
             model.eval()
-            correct_test = 0
-            total_test = 0
+            correct_test = torch.tensor(0, device=device)
+            total_test = torch.tensor(0, device=device)
+
             with torch.no_grad():
                 for inputs, labels in test_loader:
                     inputs, labels = inputs.to(device), labels.to(device)
-                    # # 在时间维度切片
-                    # start_time = 0
-                    # end_time = start_time + n_timestep
-                    # sliced_inputs = inputs[:, :, :, start_time:end_time]
+
                     with autocast():
                         outputs = model(inputs)
+
                     _, predicted = torch.max(outputs, 1)
                     total_test += labels.size(0)
                     correct_test += (predicted == labels).sum().item()
-                test_acc = 100 * correct_test / total_test
 
-                if test_acc > best_acc:
-                    best_acc = test_acc
-                    best_epoch = epoch
+            dist.all_reduce(correct_test, op=dist.ReduceOp.SUM)
+            dist.all_reduce(total_test, op=dist.ReduceOp.SUM)
+
+            test_acc = correct_test.float() / total_test * 100
+
+            if test_acc > best_acc:
+                best_acc = test_acc
+                best_epoch = epoch
 
             epoch_end_time = time.time()  # 记录结束时间
             epoch_duration = epoch_end_time - epoch_start_time  # 计算持续时间
 
-            logging.info(
-                f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
-                f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
-                f"Epoch Duration: {epoch_duration:.2f} seconds"  # 记录时间
-            )
-            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
-                  f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
-                  f"Epoch Duration: {epoch_duration:.2f} seconds")  # 显示时间
+            if local_rank == 0:  # 仅在主进程输出
+                logging.info(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, "
+                             f"Train Accuracy: {epoch_acc:.2f}%, Test Accuracy: {test_acc:.2f}%, "
+                             f"best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
+                             f"Epoch Duration: {epoch_duration:.2f} seconds")
+                print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, "
+                      f"Train Accuracy: {epoch_acc:.2f}%, Test Accuracy: {test_acc:.2f}%, "
+                      f"best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
+                      f"Epoch Duration: {epoch_duration:.2f} seconds")
 
-            best_acc_list.append(best_acc)
-        # # 在每个折叠结束后，手动释放内存
-        # del train_dataset, test_dataset, train_loader, test_loader
-        # model.to('cpu')
-        # all_eeg_data = all_eeg_data.to('cpu')
-        # all_labels = all_labels.to('cpu')
-        # torch.cuda.empty_cache()
+    cleanup_ddp()
 
     if invalid_files:
-        logging.info("Files skipped due to invalid channel size:")
-        for invalid_file in invalid_files:
-            logging.info(invalid_file)
+        if local_rank == 0:
+            logging.info("Files skipped due to invalid channel size:")
+            for invalid_file in invalid_files:
+                logging.info(invalid_file)
 
 
 if __name__ == '__main__':

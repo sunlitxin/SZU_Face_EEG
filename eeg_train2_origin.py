@@ -154,10 +154,10 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
     xx_np = np.array(xx)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
 
-    # # 如果通道数不是127，跳过
-    # if xx_np.shape[2] != 127:
-    #     logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
-    #     return None, None
+    # 如果通道数不是127，跳过
+    if xx_np.shape[2] != 127:
+        logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
+        return None, None
 
     xx_normalized = normalize_samples(xx_np)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
@@ -177,8 +177,10 @@ def setup_logging(model_name, loss_name, n_timestep, datadirname):
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}.log')  # Loss-Dataset-
+    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-origin.log')  # Loss-Dataset-
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
+    logging.info(f'recode_name:{log_filename}')
+    logging.info('train by eeg_train2_origin.py')
     logging.info(f'Starting training with model {model_name}')
     logging.info(f'Loss: {loss_name}')
     logging.info(f'Datasets: {datadirname}')
@@ -193,16 +195,16 @@ def main():
     args = parser.parse_args()
     # loss_name = 'XYLoss'
     loss_name = 'CELoss'
+    optims = 'Adam'
+    # optims = 'AdamW'
     model_name = args.model
-
-    n_timestep = 500
 
     file_prefix = args.prefix
 
-
+    n_timestep = 200
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'pudu_0'
+    datadirname = 'small_new'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
@@ -259,7 +261,7 @@ def main():
 
         # 实例化模型
         if model_name == 'EEGNet':
-            model = EEGNet(n_timesteps=n_timestep, n_electrodes=117, n_classes=46)
+            model = EEGNet(n_timesteps=n_timestep, n_electrodes=127, n_classes=50)
         elif model_name == 'classifier_EEGNet':
             model = classifier_EEGNet(temporal=500)
         elif model_name == 'classifier_SyncNet':
@@ -273,7 +275,7 @@ def main():
 
         # 支持多GPU训练
         if torch.cuda.device_count() > 1:
-            device_ids = [0, 1, 2, 3, 4, 5, 6, 7]   # 例如使用 2 个 GPU
+            device_ids = [3, 4, 5, 6, 7]   # 例如使用 2 个 GPU
 
             # 将模型分配到指定的 GPU
             model = nn.DataParallel(model, device_ids=device_ids)
@@ -282,7 +284,7 @@ def main():
         model = model.to(device)
         if loss_name == 'ArcFace':
             margin_loss = ArcFace(
-                margin=0.0
+                margin=0.5
             )
         elif loss_name == 'XYLoss':
             # robustface
@@ -300,13 +302,16 @@ def main():
         else:
             raise ValueError(f"Unknown loss: {loss_name}")
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        if optims == 'Adam':
+            optimizer = optim.Adam(model.parameters(), lr=0.001)
+        elif optims == 'AdamW':
+            optimizer = optim.AdamW(model.parameters(), lr=0.0001/2)
 
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])
 
-        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
         best_acc = 0.0
         best_epoch = 0
