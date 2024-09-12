@@ -15,6 +15,7 @@ import time  # 添加时间模块
 from Criterions import NewCrossEntropy
 from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet, \
     EEGNet_Double_FC
+from eeg_train1 import load_and_preprocess_data
 from losses import XYLoss, ArcFace
 
 seed = 1234
@@ -142,15 +143,45 @@ def pad_last_array(x, n_timestep):
         # 将补全后的数组重新赋值给最后一个元素
         x[-1] = np.vstack((x[-1], padding))
     return x
-def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
-    edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length)
+# def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
+#     edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length)
+#     stim, target_class = ziyan_read(label_file_path)
+#
+#     # 将标签值减1，以使标签范围从0到49
+#     target_class = [cls - 1 for cls in target_class]
+#
+#     xx = edf_reader.get_set(file_path=edf_file_path, stim_list=stim)
+#     if xx[-1].shape[0] != stim_length:
+#         xx = pad_last_array(xx, stim_length)
+#     xx_np = np.array(xx)
+#     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
+#
+#     # 如果通道数不是127，跳过
+#     if xx_np.shape[2] != 127:
+#         logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
+#         return None, None
+#
+#     xx_normalized = normalize_samples(xx_np)
+#     logging.info(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
+#
+#     eeg_data = np.transpose(xx_normalized, (0, 2, 1))
+#     eeg_data = eeg_data[:, np.newaxis, :, :]
+#     logging.info(f"{os.path.basename(edf_file_path)} - eeg_data.shape= {eeg_data.shape}")
+#
+#     eeg_data_tensor = torch.tensor(eeg_data, dtype=torch.float32)
+#     labels_tensor = torch.tensor(target_class, dtype=torch.long)
+#
+#     return eeg_data_tensor, labels_tensor
+def load_and_preprocess_data_window(edf_file_path, label_file_path, stim_length):
+    stim_length1 = stim_length + 600
+    edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length1)
     stim, target_class = ziyan_read(label_file_path)
 
     # 将标签值减1，以使标签范围从0到49
     target_class = [cls - 1 for cls in target_class]
 
     xx = edf_reader.get_set(file_path=edf_file_path, stim_list=stim)
-    if xx[-1].shape[0] != stim_length:
+    if xx[-1].shape[0] != stim_length1:
         xx = pad_last_array(xx, stim_length)
     xx_np = np.array(xx)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
@@ -160,7 +191,13 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
         logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
         return None, None
 
-    xx_normalized = normalize_samples(xx_np)
+        # 进行滑动窗口数据增强
+    xx_np_augmented = sliding_window_augmentation(xx_np, stim_length)
+    logging.info(f"{os.path.basename(edf_file_path)} - xx_np_augmented.shape= {xx_np_augmented.shape}")
+
+    # 将归一化函数应用到增强后的数据
+    xx_normalized = normalize_samples(xx_np_augmented)
+
     logging.info(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
 
     eeg_data = np.transpose(xx_normalized, (0, 2, 1))
@@ -168,10 +205,50 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
     logging.info(f"{os.path.basename(edf_file_path)} - eeg_data.shape= {eeg_data.shape}")
 
     eeg_data_tensor = torch.tensor(eeg_data, dtype=torch.float32)
-    labels_tensor = torch.tensor(target_class, dtype=torch.long)
+    # 生成与增强后的数据相对应的标签
+    num_augmented_samples = xx_normalized.shape[0]  # 增强后的样本数
+    num_windows_per_sample = num_augmented_samples // len(target_class)  # 每个刺激对应的窗口数
+    labels_augmented = np.repeat(target_class, num_windows_per_sample)
+
+    # 如果增强后的样本数和生成的标签数不匹配，进行额外处理（边界情况）
+    if len(labels_augmented) < num_augmented_samples:
+        extra_labels = labels_augmented[-1]  # 如果需要额外标签，可以使用最后一个标签
+        labels_augmented = np.concatenate(
+            [labels_augmented, [extra_labels] * (num_augmented_samples - len(labels_augmented))])
+
+    labels_tensor = torch.tensor(labels_augmented, dtype=torch.long)
 
     return eeg_data_tensor, labels_tensor
 
+def sliding_window_augmentation(x, window_length=200, stride=200):
+    """
+    对脑电数据应用滑动窗口数据增强
+
+    :param x: 输入数据，形状为 (刺激数量, 时间步长, 通道数)
+    :param window_length: 滑动窗口的长度
+    :param stride: 窗口的步幅
+    :return: 使用滑动窗口增强后的数据
+    """
+    num_trials, num_time_steps, num_channels = x.shape
+
+    # 计算滑动窗口的数量
+    num_windows = (num_time_steps - window_length) // stride + 1
+
+    # 初始化增强后的数据列表
+    augmented_data = []
+
+    for i in range(num_trials):
+        trial_data = x[i]
+        for start in range(0, num_time_steps - window_length + 1, stride):
+            end = start + window_length
+            windowed_data = trial_data[start:end]
+            augmented_data.append(windowed_data)
+
+    # 转换为 numpy 数组
+    augmented_data = np.array(augmented_data)
+
+    # 新的形状为 (窗口数量, 窗口长度, 通道数)
+    return augmented_data
 
 
 def setup_logging(model_name, loss_name, n_timestep, datadirname):
@@ -266,7 +343,7 @@ def main():
     all_labels = all_labels.to(device)
 
     kfold = KFold(n_splits=5, shuffle=True, random_state=42)
-    num_epochs = 300
+    num_epochs = 150
 
     scaler = GradScaler()
 

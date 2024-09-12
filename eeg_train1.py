@@ -177,7 +177,7 @@ def setup_logging(model_name, loss_name, n_timestep, datadirname):
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}.log')  # Loss-Dataset-
+    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-Adam.log')  # Loss-Dataset-
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
     logging.info(f'Starting training with model {model_name}')
     logging.info(f'Loss: {loss_name}')
@@ -202,7 +202,7 @@ def main():
 
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'pudu_0'
+    datadirname = 'New_FaceEEG'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
@@ -249,7 +249,7 @@ def main():
     all_labels = all_labels.to(device)
 
     kfold = KFold(n_splits=5, shuffle=True, random_state=42)
-    num_epochs = 300
+    num_epochs = 150
 
     scaler = GradScaler()
 
@@ -259,7 +259,7 @@ def main():
 
         # 实例化模型
         if model_name == 'EEGNet':
-            model = EEGNet(n_timesteps=n_timestep, n_electrodes=117, n_classes=46)
+            model = EEGNet(n_timesteps=n_timestep, n_electrodes=127, n_classes=50)
         elif model_name == 'classifier_EEGNet':
             model = classifier_EEGNet(temporal=500)
         elif model_name == 'classifier_SyncNet':
@@ -301,6 +301,7 @@ def main():
             raise ValueError(f"Unknown loss: {loss_name}")
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=0.001)
+        # optimizer = optim.AdamW(model.parameters(), lr=0.001)
 
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])

@@ -28,10 +28,43 @@ np.random.seed(seed)
 def normalize_samples(x):
     mean = np.mean(x, axis=1, keepdims=True)
     std = np.std(x, axis=1, keepdims=True)
+    x = (x - mean) / (std + 1e-6)
+
+    mean = np.mean(x, axis=2, keepdims=True)
+    std = np.std(x, axis=2, keepdims=True)
     x_normalized = (x - mean) / (std + 1e-6)
     return x_normalized
 
 
+def sliding_window_augmentation(x, window_length=200, stride=200):
+    """
+    对脑电数据应用滑动窗口数据增强
+
+    :param x: 输入数据，形状为 (刺激数量, 时间步长, 通道数)
+    :param window_length: 滑动窗口的长度
+    :param stride: 窗口的步幅
+    :return: 使用滑动窗口增强后的数据
+    """
+    num_trials, num_time_steps, num_channels = x.shape
+
+    # 计算滑动窗口的数量
+    num_windows = (num_time_steps - window_length) // stride + 1
+
+    # 初始化增强后的数据列表
+    augmented_data = []
+
+    for i in range(num_trials):
+        trial_data = x[i]
+        for start in range(0, num_time_steps - window_length + 1, stride):
+            end = start + window_length
+            windowed_data = trial_data[start:end]
+            augmented_data.append(windowed_data)
+
+    # 转换为 numpy 数组
+    augmented_data = np.array(augmented_data)
+
+    # 新的形状为 (窗口数量, 窗口长度, 通道数)
+    return augmented_data
 class MNEReader(object):
     def __init__(self, filetype='edf', method='stim', resample=None, length=500, exclude=(), stim_channel='auto',
                  montage=None):
@@ -142,14 +175,15 @@ def pad_last_array(x, n_timestep):
         x[-1] = np.vstack((x[-1], padding))
     return x
 def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
-    edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length)
+    stim_length1 = stim_length + 600
+    edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length1)
     stim, target_class = ziyan_read(label_file_path)
 
     # 将标签值减1，以使标签范围从0到49
     target_class = [cls - 1 for cls in target_class]
 
     xx = edf_reader.get_set(file_path=edf_file_path, stim_list=stim)
-    if xx[-1].shape[0] != stim_length:
+    if xx[-1].shape[0] != stim_length1:
         xx = pad_last_array(xx, stim_length)
     xx_np = np.array(xx)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
@@ -159,7 +193,13 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
         logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
         return None, None
 
-    xx_normalized = normalize_samples(xx_np)
+        # 进行滑动窗口数据增强
+    xx_np_augmented = sliding_window_augmentation(xx_np, stim_length)
+    logging.info(f"{os.path.basename(edf_file_path)} - xx_np_augmented.shape= {xx_np_augmented.shape}")
+
+    # 将归一化函数应用到增强后的数据
+    xx_normalized = normalize_samples(xx_np_augmented)
+
     logging.info(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
 
     eeg_data = np.transpose(xx_normalized, (0, 2, 1))
@@ -167,17 +207,28 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
     logging.info(f"{os.path.basename(edf_file_path)} - eeg_data.shape= {eeg_data.shape}")
 
     eeg_data_tensor = torch.tensor(eeg_data, dtype=torch.float32)
-    labels_tensor = torch.tensor(target_class, dtype=torch.long)
+    # 生成与增强后的数据相对应的标签
+    num_augmented_samples = xx_normalized.shape[0]  # 增强后的样本数
+    num_windows_per_sample = num_augmented_samples // len(target_class)  # 每个刺激对应的窗口数
+    labels_augmented = np.repeat(target_class, num_windows_per_sample)
+
+    # 如果增强后的样本数和生成的标签数不匹配，进行额外处理（边界情况）
+    if len(labels_augmented) < num_augmented_samples:
+        extra_labels = labels_augmented[-1]  # 如果需要额外标签，可以使用最后一个标签
+        labels_augmented = np.concatenate(
+            [labels_augmented, [extra_labels] * (num_augmented_samples - len(labels_augmented))])
+
+    labels_tensor = torch.tensor(labels_augmented, dtype=torch.long)
 
     return eeg_data_tensor, labels_tensor
 
 
 def setup_logging(model_name, loss_name, n_timestep, datadirname):
-    log_dir_name = f'{model_name}_{loss_name}'
+    log_dir_name = f'{datadirname}-{model_name}'
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-origin.log')  # Loss-Dataset-
+        os.makedirs(log_dir, exist_ok=True)
+    log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-origin-4Xwin-time_channel_bn_shuffled.log')  # Loss-Dataset-time_channel_bn
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
     logging.info(f'recode_name:{log_filename}')
     logging.info('train by eeg_train2_origin.py')
@@ -197,14 +248,15 @@ def main():
     loss_name = 'CELoss'
     optims = 'Adam'
     # optims = 'AdamW'
-    model_name = args.model
+    model_name = 'EEGNet'
 
     file_prefix = args.prefix
 
     n_timestep = 200
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'small_new'
+    datadirname = 'New_FaceEEG'
+    # datadirname = 'small_new'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
@@ -250,8 +302,9 @@ def main():
     all_eeg_data = all_eeg_data.to(device)
     all_labels = all_labels.to(device)
 
-    kfold = KFold(n_splits=5, shuffle=True, random_state=42)
-    num_epochs = 300
+    #kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+    kfold = KFold(n_splits=5, shuffle=True)
+    num_epochs = 150
 
     scaler = GradScaler()
 
@@ -263,19 +316,19 @@ def main():
         if model_name == 'EEGNet':
             model = EEGNet(n_timesteps=n_timestep, n_electrodes=127, n_classes=50)
         elif model_name == 'classifier_EEGNet':
-            model = classifier_EEGNet(temporal=500)
+            model = classifier_EEGNet(temporal=n_timestep)
         elif model_name == 'classifier_SyncNet':
-            model = classifier_SyncNet(temporal=500)
+            model = classifier_SyncNet(temporal=n_timestep)
         elif model_name == 'classifier_CNN':
-            model = classifier_CNN(num_points=500, n_classes=50)
+            model = classifier_CNN(num_points=n_timestep, n_classes=50)
         elif model_name == 'classifier_EEGChannelNet':
-            model = classifier_EEGChannelNet(temporal=500)
+            model = classifier_EEGChannelNet(temporal=n_timestep)
         else:
             raise ValueError(f"Unknown model: {model_name}")
 
         # 支持多GPU训练
         if torch.cuda.device_count() > 1:
-            device_ids = [3, 4, 5, 6, 7]   # 例如使用 2 个 GPU
+            device_ids = [0, 1, 2, 3, 4, 5, 6, 7]   # 例如使用 2 个 GPU
 
             # 将模型分配到指定的 GPU
             model = nn.DataParallel(model, device_ids=device_ids)
@@ -303,7 +356,7 @@ def main():
             raise ValueError(f"Unknown loss: {loss_name}")
         criterion = nn.CrossEntropyLoss()
         if optims == 'Adam':
-            optimizer = optim.Adam(model.parameters(), lr=0.001)
+            optimizer = optim.Adam(model.parameters(), lr=0.0001)
         elif optims == 'AdamW':
             optimizer = optim.AdamW(model.parameters(), lr=0.0001/2)
 
@@ -384,12 +437,6 @@ def main():
                   f"Epoch Duration: {epoch_duration:.2f} seconds")  # 显示时间
 
             best_acc_list.append(best_acc)
-        # # 在每个折叠结束后，手动释放内存
-        # del train_dataset, test_dataset, train_loader, test_loader
-        # model.to('cpu')
-        # all_eeg_data = all_eeg_data.to('cpu')
-        # all_labels = all_labels.to('cpu')
-        # torch.cuda.empty_cache()
 
     if invalid_files:
         logging.info("Files skipped due to invalid channel size:")

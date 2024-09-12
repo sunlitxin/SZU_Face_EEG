@@ -52,29 +52,12 @@ def main():
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
     datadirname = 'New_FaceEEG'
-    # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
-    # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
-    # base_path = '/data0/xinyang/SZU_Face_EEG/small'#
-    # base_path = '/data0/xinyang/SZU_Face_EEG/small_eeg'
     edf_files = find_edf_and_markers_files(base_path, file_prefix)
 
     # Setup logging
     setup_logging(model_name, loss_name, n_timestep, datadirname)
 
-    # 定义映射关系
-    # mapping = {
-    #     0: "Male", 1: "Male", 2: "Male", 3: "Female", 4: "Female",
-    #     5: "Female", 6: "Male", 7: "Male", 8: "Female", 9: "Female",
-    #     10: "Male", 11: "Male", 12: "Female", 13: "Female", 14: "Male",
-    #     15: "Female", 16: "Male", 17: "Female", 18: "Female", 19: "Male",
-    #     20: "Female", 21: "Male", 22: "Female", 23: "Male", 24: "Female",
-    #     25: "Female", 26: "Female", 27: "Female", 28: "Male", 29: "Female",
-    #     30: "Male", 31: "Male", 32: "Female", 33: "Male", 34: "Male",
-    #     35: "Female", 36: "Female", 37: "Male", 38: "Female", 39: "Male",
-    #     40: "Female", 41: "Male", 42: "Male", 43: "Female", 44: "Male",
-    #     45: "Male", 46: "Male", 47: "Male", 48: "Female", 49: "Female"
-    # }
     mapping = {
         0: 0, 1: 0, 2: 0, 3: 1, 4: 1,
         5: 1, 6: 0, 7: 0, 8: 1, 9: 1,
@@ -290,13 +273,6 @@ def main():
 
             best_acc_list.append(best_acc)
 
-        # # 在每个折叠结束后，手动释放内存
-        # del train_dataset, test_dataset, train_loader, test_loader
-        # model1.to('cpu')
-        # model2.to('cpu')
-        # all_eeg_data = all_eeg_data.to('cpu')
-        # all_labels = all_labels.to('cpu')
-        # torch.cuda.empty_cache()
 
     if invalid_files:
         logging.info("Files skipped due to invalid channel size:")

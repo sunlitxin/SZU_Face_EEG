@@ -18,25 +18,52 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from Criterions import NewCrossEntropy
 from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet
 from losses import XYLoss, ArcFace
+from utils.utils_config import get_config
+import signal
+import torch.distributed as dist
 
-seed = 1234
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-random.seed(seed)
-np.random.seed(seed)
+def cleanup():
+    # 关闭分布式进程组
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
+def signal_handler(sig, frame):
+    print("Received signal to terminate, cleaning up...")
+    cleanup()
+    exit(0)
 
+# 注册信号处理函数
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)  # 捕捉 Ctrl+C 终止信号
+
+def setup_seed(seeds):
+    seed = seeds
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    random.seed(seed)
+    np.random.seed(seed)
+
+# Usage: python -m torch.distributed.launch --nproc_per_node=8 --use_env eeg_ddp_train2_origin.py --model EEGNet --local_rank 0
+# or
+# python3 -m torch.distributed.launch --nproc_per_node=8 --nnodes=1 --node_rank=0 --master_addr="127.0.0.1" --master_port=12581 eeg_ddp_train2_origin.py
+# watch -n 2 --color gpustat --c
 
 def setup_ddp():
     # 初始化分布式训练
     dist.init_process_group(backend='nccl')
-    local_rank = torch.distributed.get_rank()
+
+    # 获取进程的 rank (local_rank) 和 world_size
+    local_rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    # 设置当前进程使用的 GPU
     torch.cuda.set_device(local_rank)
     device = torch.device(f'cuda:{local_rank}')
-    return device, local_rank
+
+    return device, local_rank, world_size
 
 def cleanup_ddp():
     dist.destroy_process_group()
@@ -192,10 +219,10 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
     return eeg_data_tensor, labels_tensor
 
 def setup_logging(model_name, loss_name, n_timestep, datadirname):
-    log_dir_name = f'{model_name}_{loss_name}'
+    log_dir_name = f'{datadirname}-{model_name}'
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+        os.makedirs(log_dir, exist_ok=True)
     log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-origin.log')  # Loss-Dataset-
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
     logging.info(f'recode_name:{log_filename}')
@@ -205,13 +232,17 @@ def setup_logging(model_name, loss_name, n_timestep, datadirname):
     logging.info(f'Datasets: {datadirname}')
 
 def main():
+    setup_seed(seeds=1234)
+    # # get config
+    # cfg = get_config(args.config)
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='EEGNet')
     parser.add_argument('--prefix', type=str, default=None, help='File prefix to filter EEG data files')
     parser.add_argument('--local_rank', type=int, default=-1, help='Local rank passed from distributed launcher')
     args = parser.parse_args()
 
-    device, local_rank = setup_ddp()
+    device, local_rank, world_size = setup_ddp()
 
     # loss_name = 'XYLoss'
     loss_name = 'CELoss'
@@ -223,7 +254,8 @@ def main():
 
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'New_FaceEEG'
+    datadirname = 'small_new'
+    # datadirname = 'New_FaceEEG'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
     base_path = os.path.join(base_path0, datadirname)
@@ -264,7 +296,7 @@ def main():
     all_labels = torch.cat(all_labels)
 
     if local_rank == 0:
-        print('---------finished load and preprocess data----------')
+        print('---------------------------finished load and preprocess data----------------------------')
 
     kfold = KFold(n_splits=5, shuffle=True, random_state=42)
     num_epochs = 300
@@ -320,13 +352,15 @@ def main():
         elif optims == 'AdamW':
             optimizer = optim.AdamW(model.parameters(), lr=0.0001/2)
 
+        # 创建数据集
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])
 
-        # 使用分布式采样器
-        train_sampler = DistributedSampler(train_dataset)
-        test_sampler = DistributedSampler(test_dataset)
+        # 使用分布式采样器，确保每个 GPU 获取不同的数据子集
+        train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank)
+        test_sampler = DistributedSampler(test_dataset, num_replicas=world_size, rank=local_rank)
 
+        # 创建 DataLoader，使用 DistributedSampler
         train_loader = DataLoader(train_dataset, batch_size=32, sampler=train_sampler)
         test_loader = DataLoader(test_dataset, batch_size=32, sampler=test_sampler)
 
