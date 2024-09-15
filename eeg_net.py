@@ -66,7 +66,9 @@ class EEGNet(nn.Module):
 
         x = self.flatten(x)
         x = self.fc(x)
+        # x = torch.sigmoid(x)
 
+        # return x.squeeze(1)
         return x
 
 class EEGNet_Double_FC(nn.Module):

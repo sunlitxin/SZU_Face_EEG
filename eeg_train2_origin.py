@@ -255,7 +255,7 @@ def main():
     n_timestep = 200
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'New_FaceEEG'
+    datadirname = 'small_new'
     # datadirname = 'small_new'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
