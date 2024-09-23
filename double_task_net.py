@@ -13,9 +13,13 @@ from torch.cuda.amp import GradScaler, autocast
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 
+from backbone.resnet import get_model
+from backbone.vit import vit_resize
 from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet
 from losses import ArcFace, XYLoss
 from utils.utils_tools import load_and_preprocess_data, find_edf_and_markers_files
+from torchvision.models import resnet18, resnet34, resnet50
+import torch.nn.functional as F
 
 seed = 1234
 torch.manual_seed(seed)
@@ -26,14 +30,14 @@ torch.backends.cudnn.benchmark = False
 random.seed(seed)
 np.random.seed(seed)
 
-def setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type): #[200,800,200] [n_timestep, n_timestep_end, stride ]
+def setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target): #[200,800,200] [n_timestep, n_timestep_end, stride ]
     n_timestep, n_timestep_end, stride = n_timestep_list
     log_dir_name = f'{datadirname}'
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     #log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-single_back.log')
-    log_filename = os.path.join(log_dir, f'{model_name}-({n_timestep},{n_timestep_end},{stride})-{loss_name}-{norm_type}-shuffle-50.log')
+    log_filename = os.path.join(log_dir, f'{model_name}-({n_timestep},{n_timestep_end},{stride})-{loss_name}-{norm_type}-{classification_target}.log')
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
     logging.info(f'recode_name:{log_filename}')
     logging.info('train by double_learn.py')
@@ -56,7 +60,8 @@ def main():
     # model_name = args.model
     model_name = 'EEGNet'
     file_prefix = args.prefix
-    n_timestep_list = [500, 500, 500]
+    n_timestep_list = [400, 400, 200]
+    classification_target = 'sex' # sex or id
     norm_type = 'Channel-wise Normalization'  ## [Global Normalization: GN, Channel-wise Normalization: CN, Time-step Normalization: TN, Sliding Window Normalization: SWN]
 
     # Base path
@@ -66,7 +71,7 @@ def main():
     edf_files = find_edf_and_markers_files(base_path, file_prefix)
 
     # Setup logging
-    setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type)
+    setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target)
 
     mapping = {
         0: 0, 1: 0, 2: 0, 3: 1, 4: 1,
@@ -116,34 +121,21 @@ def main():
     all_eeg_data = all_eeg_data.to(device)
     all_labels = all_labels.to(device)
 
-    kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+    # kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+    kfold = KFold(n_splits=5, shuffle=False)
     num_epochs = 150
 
     scaler = GradScaler()
-
+    if classification_target == 'sex':
+        num_classes = 2
+    else:
+        num_classes = 50
     for fold, (train_idx, test_idx) in enumerate(kfold.split(all_eeg_data)):
         logging.info(f"FOLD {fold + 1}")
         print(f"FOLD {fold + 1}")
 
         # 实例化模型
-        if model_name == 'EEGNet':
-            model2 = EEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=50)
-        elif model_name == 'classifier_EEGNet':
-            model1 = classifier_EEGNet(temporal=500)
-            model2 = classifier_EEGNet(temporal=500)
-        elif model_name == 'classifier_SyncNet':
-            model1 = classifier_SyncNet(temporal=500)
-            model2 = classifier_SyncNet(temporal=500)
-        elif model_name == 'classifier_CNN':
-            model1 = classifier_CNN(num_points=500, n_classes=50)
-            model2 = classifier_CNN(num_points=500, n_classes=2)  # 适配性别分类
-        elif model_name == 'classifier_EEGChannelNet':
-            model1 = classifier_EEGChannelNet(temporal=500)
-            model2 = classifier_EEGChannelNet(temporal=500)
-        elif model_name == 'DoubletaskNet':
-            model2 = EEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=2)  # 适配性别分类
-        else:
-            raise ValueError(f"Unknown model: {model_name}")
+        model2 = get_model(num_classes=num_classes, model_name=model_name, n_timestep=n_timestep)
 
         # 支持多GPU训练
         if torch.cuda.device_count() > 1:
@@ -165,8 +157,8 @@ def main():
         else:
             raise ValueError(f"Unknown loss: {loss_name}")
 
-        optimizer = optim.Adam(model2.parameters(), lr=0.001)
-
+        optimizer = optim.Adam(model2.parameters(), lr=0.0001/2)
+        # optimizer = torch.optim.SGD(model2.parameters(), lr=0.0001, momentum=0.9, weight_decay=5e-4)
 
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])
@@ -182,6 +174,7 @@ def main():
 
             model2.train()
             running_loss = 0.0
+            test_running_loss = 0.0
             correct = 0
             total = 0
             for inputs, labels in train_loader:
@@ -193,10 +186,12 @@ def main():
                 # sliced_inputs = inputs[:, :, :, start_time:end_time]
                 optimizer.zero_grad()
                 with autocast():
+                    if model_name == 'vit':
+                        inputs = vit_resize(inputs)
                     outputs = model2(inputs)
-                    # label_sex = label_sex.float()
+                    if classification_target == 'sex':
+                        labels = label_sex
                     loss = criterion(outputs, labels)
-
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
@@ -218,14 +213,21 @@ def main():
                     label_sex = torch.tensor([mapping[label.item()] for label in labels], device=labels.device)
                     inputs, labels, label_sex = inputs.to(device), labels.to(device), label_sex.to(device)
                     with autocast():
+                        if model_name == 'vit':
+                            inputs = vit_resize(inputs)
                         outputs = model2(inputs)
+                        if classification_target == 'sex':
+                            labels = label_sex
+                        loss_test = criterion(outputs, labels)
+                        test_running_loss += loss_test.item()
                     _, predicted = torch.max(outputs, 1)
                     # predicted = (outputs > 0.5).float()
                     total_test += labels.size(0)
                     correct_test += (predicted == labels).sum().item()
+                epoch_test_loss = test_running_loss / len(test_loader)
                 test_acc = 100 * correct_test / total_test
 
-                if test_acc > best_acc:
+                if test_acc >= best_acc:
                     best_acc = test_acc
                     best_epoch = epoch
 
@@ -233,11 +235,11 @@ def main():
             epoch_duration = epoch_end_time - epoch_start_time  # 计算持续时间
 
             logging.info(
-                f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
+                f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, TestLoss:{epoch_test_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
                 f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
                 f"Epoch Duration: {epoch_duration:.2f} seconds"  # 记录时间
             )
-            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, TestLoss:{epoch_test_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
                   f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
                   f"Epoch Duration: {epoch_duration:.2f} seconds")  # 显示时间
 
