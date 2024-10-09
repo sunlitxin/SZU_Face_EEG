@@ -20,7 +20,7 @@ def modify_resnet(model, num_classes=50):
 def get_model(num_classes, model_name,n_timestep):
 
     if model_name == 'EEGNet':
-        model = EEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes)
+        model = EEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=0.6)
     elif model_name == 'classifier_EEGNet':
         model = classifier_EEGNet(temporal=n_timestep)
     elif model_name == 'classifier_SyncNet':

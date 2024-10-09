@@ -7,23 +7,42 @@ import torch
 
 
 def normalizes_setup(eeg_data, norm_type):
-    if norm_type == 'Global Normalization' or 'GN':
+    if norm_type == 'Global Normalization' or norm_type == 'GN':
         # 全局标准化
         eeg_data_normalized = global_normalize_eeg(eeg_data)
-    elif norm_type == 'Channel-wise Normalization' or 'CN':
+    elif norm_type == 'Channel-wise Normalization' or norm_type == 'CN':
         # 通道内标准化
         eeg_data_normalized = channel_wise_normalize_eeg(eeg_data)
-    elif norm_type == 'Time-step Normalization' or 'TN':
+    elif norm_type == 'Time-step Normalization' or norm_type == 'TN':
         # 时间步标准化
         eeg_data_normalized = time_step_normalize_eeg(eeg_data)
-    elif norm_type == 'Sliding Window Normalization' or 'SWN':
+    elif norm_type == 'Sliding Window Normalization' or norm_type == 'SWN':
         # 滑动窗口标准化
         eeg_data_normalized = sliding_window_normalize_eeg(eeg_data, window_length=200, stride=100)
+    elif norm_type == 'L2Norm':
+        eeg_data_normalized = l2_normalize(eeg_data)
     else:
         eeg_data_normalized = normalize_samples(eeg_data)
     return eeg_data_normalized
 
 
+def l2_normalize(eeg_data):
+    """
+    对形状为 (batch_size, channels, time) 的 EEG 数据进行 L2 归一化。
+
+    参数:
+    eeg_data (torch.Tensor or np.ndarray): 输入的 EEG 数据，形状为 (128, 1000, 126)
+
+    返回:
+    np.ndarray: 归一化后的 EEG 数据，形状与输入相同，数据类型为 NumPy 数组。
+    """
+    if isinstance(eeg_data, np.ndarray):
+        eeg_data = torch.from_numpy(eeg_data)  # 转换为张量
+
+    norm = torch.norm(eeg_data, p=2, dim=(1, 2), keepdim=True)  # 计算 L2 范数
+    normalized_data = eeg_data / norm  # 进行 L2 归一化
+
+    return normalized_data.numpy()  # 转换为 NumPy 数组并返回
 def normalize_samples(x):## 通道内标准化
     mean = np.mean(x, axis=1, keepdims=True)
     std = np.std(x, axis=1, keepdims=True)
@@ -115,14 +134,45 @@ def sliding_window_normalize_eeg(eeg_data, window_length=200, stride=100):
     return normalized_windows
 
 
-def sliding_window_augmentation(x, window_length=200, stride=200):
+# def sliding_window_augmentation(x, window_length=200, stride=200):
+#     """
+#     对脑电数据应用滑动窗口数据增强
+#
+#     :param x: 输入数据，形状为 (刺激数量, 时间步长, 通道数)
+#     :param window_length: 滑动窗口的长度
+#     :param stride: 窗口的步幅
+#     :return: 使用滑动窗口增强后的数据
+#     """
+#     num_trials, num_time_steps, num_channels = x.shape
+#
+#     # 计算滑动窗口的数量
+#     num_windows = (num_time_steps - window_length) // stride + 1
+#
+#     # 初始化增强后的数据列表
+#     augmented_data = []
+#
+#     for i in range(num_trials):
+#         trial_data = x[i]
+#         for start in range(0, num_time_steps - window_length + 1, stride):
+#             end = start + window_length
+#             windowed_data = trial_data[start:end]
+#             augmented_data.append(windowed_data)
+#
+#     # 转换为 numpy 数组
+#     augmented_data = np.array(augmented_data)
+#
+#     # 新的形状为 (窗口数量, 窗口长度, 通道数)
+#     return augmented_data
+
+def sliding_window_augmentation(x, window_length=200, stride=200, method=None):
     """
-    对脑电数据应用滑动窗口数据增强
+    对脑电数据应用滑动窗口数据增强，并可选地对滑动窗口的片段进行叠加处理。
 
     :param x: 输入数据，形状为 (刺激数量, 时间步长, 通道数)
     :param window_length: 滑动窗口的长度
     :param stride: 窗口的步幅
-    :return: 使用滑动窗口增强后的数据
+    :param method: 叠加方式，可选 'mean'、'max'、'min'、'median'、'sum'、'variance'、'std'、'range'，为 None 时不进行叠加
+    :return: 使用滑动窗口增强并叠加后的数据，形状为 (刺激数量, 窗口长度, 通道数)
     """
     num_trials, num_time_steps, num_channels = x.shape
 
@@ -141,9 +191,41 @@ def sliding_window_augmentation(x, window_length=200, stride=200):
 
     # 转换为 numpy 数组
     augmented_data = np.array(augmented_data)
+    # augmented_data = normalizes_setup(augmented_data, 'CN')
 
-    # 新的形状为 (窗口数量, 窗口长度, 通道数)
-    return augmented_data
+    # 如果 method 为 None，则直接返回增强后的数据片段，形状为 (窗口数量, 窗口长度, 通道数)
+    if method is None:
+        return augmented_data
+
+    # 否则进行叠加处理，将所有片段叠加为一个与 window_length 相同的片段
+    # 初始化叠加后的数据数组，大小为 (num_trials, window_length, num_channels)
+    combined_data = np.zeros((num_trials, window_length, num_channels))
+
+    # 对每个试验分别进行叠加
+    for i in range(num_trials):
+        # 取出当前试验的所有窗口片段
+        trial_windows = augmented_data[i * num_windows:(i + 1) * num_windows]
+        # 对每个窗口片段进行归一化
+        normalized_windows = [normalizes_setup(window, 'CN') for window in trial_windows]
+
+        if method == 'mean':
+            combined_data[i] = np.mean(normalized_windows, axis=0)
+        elif method == 'max':
+            combined_data[i] = np.max(normalized_windows, axis=0)
+        elif method == 'min':
+            combined_data[i] = np.min(normalized_windows, axis=0)
+        elif method == 'median':
+            combined_data[i] = np.median(normalized_windows, axis=0)
+        elif method == 'sum':
+            combined_data[i] = np.sum(normalized_windows, axis=0)
+        elif method == 'variance':
+            combined_data[i] = np.var(normalized_windows, axis=0)
+        elif method == 'std':
+            combined_data[i] = np.std(normalized_windows, axis=0)
+        elif method == 'range':
+            combined_data[i] = np.ptp(normalized_windows, axis=0)  # ptp = peak to peak, 即 max - min
+
+    return combined_data
 
 class MNEReader(object):
     def __init__(self, filetype='edf', method='stim', resample=None, length=500, exclude=(), stim_channel='auto',
@@ -256,7 +338,7 @@ def pad_last_array(x, n_timestep):
     return x
 
 
-def load_and_preprocess_data(edf_file_path, label_file_path, stim_length_list, norm_type):
+def load_and_preprocess_data(edf_file_path, label_file_path, stim_length_list, norm_type, merge_strategy):
     stim_length, n_timestep_end, stride = stim_length_list
     edf_reader = MNEReader(filetype='edf', method='manual', length=n_timestep_end)
     stim, target_class = ziyan_read(label_file_path)
@@ -270,17 +352,18 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length_list, n
     xx_np = np.array(xx)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
 
-    # 如果通道数不是127，跳过
+    # 如果通道数不是126，跳过
     if xx_np.shape[2] != 126:
         logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
         return None, None
 
         # 进行滑动窗口数据增强
-    xx_np_augmented = sliding_window_augmentation(xx_np, stim_length, stride=200)
+    xx_np_augmented = sliding_window_augmentation(xx_np, stim_length, stride=200, method=merge_strategy)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np_augmented.shape= {xx_np_augmented.shape}")
     # xx_np_augmented = xx_np
     # 将归一化函数应用到增强后的数据
     xx_normalized = normalizes_setup(xx_np_augmented, norm_type)
+
 
     logging.info(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
 
@@ -303,3 +386,22 @@ def load_and_preprocess_data(edf_file_path, label_file_path, stim_length_list, n
     labels_tensor = torch.tensor(labels_augmented, dtype=torch.long)
 
     return eeg_data_tensor, labels_tensor
+
+
+if __name__ == '__main__':
+    # 生成示例脑电数据，形状为 (样本数, 时间步长, 通道数)
+    eeg_data = np.random.rand(5, 100, 3) * 10  # 5个样本，100个时间步，3个通道
+
+    print("原始数据:\n", eeg_data)
+
+    # 全局标准化
+    global_normalized = global_normalize_eeg(eeg_data)
+    print("\n全局标准化后的数据:\n", global_normalized)
+
+    # 通道内标准化
+    channel_wise_normalized = channel_wise_normalize_eeg(eeg_data)
+    print("\n通道内标准化后的数据:\n", channel_wise_normalized)
+
+    # 时间步标准化
+    time_step_normalized = time_step_normalize_eeg(eeg_data)
+    print("\n时间步标准化后的数据:\n", time_step_normalized)

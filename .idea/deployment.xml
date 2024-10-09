@@ -73,6 +73,27 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (14)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (15)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/data0/xinyang/mapping/SZU_Face_EEG" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (16)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/data0/xinyang/mapping/SZU_Face_EEG" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="xinyang@172.31.224.73:22003 password (2)">
         <serverdata>
           <mappings>

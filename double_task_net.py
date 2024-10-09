@@ -30,20 +30,29 @@ torch.backends.cudnn.benchmark = False
 random.seed(seed)
 np.random.seed(seed)
 
-def setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target): #[200,800,200] [n_timestep, n_timestep_end, stride ]
+def setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target, merge_strategys, lr, regularization_type): #[200,800,200] [n_timestep, n_timestep_end, stride ]
     n_timestep, n_timestep_end, stride = n_timestep_list
     log_dir_name = f'{datadirname}'
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     #log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-single_back.log')
-    log_filename = os.path.join(log_dir, f'{model_name}-({n_timestep},{n_timestep_end},{stride})-{loss_name}-{norm_type}-{classification_target}.log')
+    log_filename = os.path.join(log_dir, f'{model_name}-({n_timestep},{n_timestep_end},{stride})-{loss_name}-{norm_type}-{merge_strategys}-{classification_target}-lr{lr}-{regularization_type}.log')
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
     logging.info(f'recode_name:{log_filename}')
     logging.info('train by double_learn.py')
     logging.info(f'Starting training with model {model_name}')
     logging.info(f'Loss: {loss_name}')
     logging.info(f'Datasets: {datadirname}')
+    logging.info(f'Merge_strategys: {merge_strategys}')
+    logging.info(f'lr: {lr}')
+
+def l1_regularization(model, lambda_l1):
+    l1_loss = 0.0
+    for param in model.parameters():
+        l1_loss += torch.sum(torch.abs(param))
+    return lambda_l1 * l1_loss
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -60,18 +69,27 @@ def main():
     # model_name = args.model
     model_name = 'EEGNet'
     file_prefix = args.prefix
-    n_timestep_list = [400, 400, 200]
-    classification_target = 'sex' # sex or id
-    norm_type = 'Channel-wise Normalization'  ## [Global Normalization: GN, Channel-wise Normalization: CN, Time-step Normalization: TN, Sliding Window Normalization: SWN]
+    n_timestep_list = [500,1000, 500]  #n_timestep, n_timestep_end, stride
+    classification_target = 'id' # sex or id
+    norm_type = 'Channel-wise Normalization'  ## [Global Normalization: GN, Channel-wise Normalization: CN, Time-step Normalization: TN, Sliding Window Normalization: SWN, L2Norm]
+    merge_strategys = None     #'mean'、'max'、'min'、'median'、'sum'、'variance'、'std'、'range'  None
+    lr = 0.001
+
+    # 新增正则化类型参数
+    regularization_type = 'L2'  # 选择 L1, L2, CL（L1+L2组合）, NL（无L1和L2）
+    lambda_l1 = 1e-5  # L1正则化强度
+    lambda_l2 = 1e-4  # L2正则化强度
+
 
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'xy_std'
+    datadirname = 'xy_std/Face_EEG_HuShuhan'
     base_path = os.path.join(base_path0, datadirname)
     edf_files = find_edf_and_markers_files(base_path, file_prefix)
 
+
     # Setup logging
-    setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target)
+    setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target, merge_strategys, lr, regularization_type)
 
     mapping = {
         0: 0, 1: 0, 2: 0, 3: 1, 4: 1,
@@ -99,7 +117,7 @@ def main():
             logging.info(f"Markers file for {edf_file_path} does not exist. Skipping.")
             continue
 
-        eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length_list=n_timestep_list, norm_type=norm_type)
+        eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length_list=n_timestep_list, norm_type=norm_type, merge_strategy=merge_strategys)
         print('-------------------')
 
         if eeg_data is None or labels is None:
@@ -121,21 +139,28 @@ def main():
     all_eeg_data = all_eeg_data.to(device)
     all_labels = all_labels.to(device)
 
-    # kfold = KFold(n_splits=5, shuffle=True, random_state=42)
-    kfold = KFold(n_splits=5, shuffle=False)
-    num_epochs = 150
+    kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+    # kfold = KFold(n_splits=5, shuffle=False)
+    num_epochs = 300
 
     scaler = GradScaler()
-    if classification_target == 'sex':
-        num_classes = 2
-    else:
-        num_classes = 50
+    num_classes = 50 if classification_target == 'id' else 2
+
     for fold, (train_idx, test_idx) in enumerate(kfold.split(all_eeg_data)):
         logging.info(f"FOLD {fold + 1}")
         print(f"FOLD {fold + 1}")
 
         # 实例化模型
         model2 = get_model(num_classes=num_classes, model_name=model_name, n_timestep=n_timestep)
+
+        # 根据 regularization_type 选择是否加入 L2 正则化
+        if regularization_type in ['L2', 'CL']:
+            optimizer = optim.Adam(model2.parameters(), lr=lr, weight_decay=lambda_l2)
+            print(f'regularization: {regularization_type}')
+        else:
+            optimizer = optim.Adam(model2.parameters(), lr=lr)  # 无L2正则化
+            print(f'no regularization or l1: {regularization_type}')
+            # optimizer = torch.optim.SGD(model2.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
 
         # 支持多GPU训练
         if torch.cuda.device_count() > 1:
@@ -157,26 +182,24 @@ def main():
         else:
             raise ValueError(f"Unknown loss: {loss_name}")
 
-        optimizer = optim.Adam(model2.parameters(), lr=0.0001/2)
-        # optimizer = torch.optim.SGD(model2.parameters(), lr=0.0001, momentum=0.9, weight_decay=5e-4)
 
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])
 
         train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=64, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
         best_acc = 0.0
         best_epoch = 0
         best_acc_list = []
         for epoch in range(num_epochs):
             epoch_start_time = time.time()  # 记录开始时间
-
             model2.train()
             running_loss = 0.0
             test_running_loss = 0.0
             correct = 0
             total = 0
+
             for inputs, labels in train_loader:
                 label_sex = torch.tensor([mapping[label.item()] for label in labels], device=labels.device)
                 inputs, labels, label_sex = inputs.to(device), labels.to(device), label_sex.to(device)
@@ -185,6 +208,7 @@ def main():
                 # end_time = start_time + n_timestep
                 # sliced_inputs = inputs[:, :, :, start_time:end_time]
                 optimizer.zero_grad()
+
                 with autocast():
                     if model_name == 'vit':
                         inputs = vit_resize(inputs)
@@ -192,6 +216,16 @@ def main():
                     if classification_target == 'sex':
                         labels = label_sex
                     loss = criterion(outputs, labels)
+
+                # 根据 regularization_type 添加 L1 或 L1+L2 正则化
+                if regularization_type == 'L1':
+                    l1_loss = l1_regularization(model2, lambda_l1)
+                    loss += l1_loss
+                elif regularization_type == 'CL':  # 组合 L1 和 L2 正则化
+                    l1_loss = l1_regularization(model2, lambda_l1)
+                    loss += l1_loss
+
+
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
