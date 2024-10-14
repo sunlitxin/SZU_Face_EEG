@@ -5,7 +5,8 @@ from torchvision.models import resnet18, resnet34, resnet50
 
 from backbone.ResEEGNet import ResEEGNet
 from backbone.vit import Process_ViT
-from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet
+from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet, \
+    AttenEEGNet, EEGNetTimeWeight
 
 
 def modify_resnet(model, num_classes=50):
@@ -21,6 +22,10 @@ def get_model(num_classes, model_name,n_timestep):
 
     if model_name == 'EEGNet':
         model = EEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=0.6)
+    elif model_name == 'AttenEEGNet':
+        model = AttenEEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=0.6)
+    elif model_name == 'EEGNetTimeWeight':
+        model = EEGNetTimeWeight(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=0.6)
     elif model_name == 'classifier_EEGNet':
         model = classifier_EEGNet(temporal=n_timestep)
     elif model_name == 'classifier_SyncNet':
@@ -43,5 +48,6 @@ def get_model(num_classes, model_name,n_timestep):
         model = Process_ViT(num_classes=num_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
+
 
     return model

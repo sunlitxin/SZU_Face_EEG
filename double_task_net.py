@@ -67,16 +67,16 @@ def main():
     # loss_name = 'XYLoss'
     loss_name = 'CELoss' ## [CELoss, BCEWLLoss]
     # model_name = args.model
-    model_name = 'EEGNet'
+    model_name = 'AttenEEGNet'  #AttenEEGNet   EEGNetTimeWeight    EEGNet
     file_prefix = args.prefix
-    n_timestep_list = [500,1000, 500]  #n_timestep, n_timestep_end, stride
+    n_timestep_list = [100, 100, 100]  #n_timestep, n_timestep_end, stride
     classification_target = 'id' # sex or id
     norm_type = 'Channel-wise Normalization'  ## [Global Normalization: GN, Channel-wise Normalization: CN, Time-step Normalization: TN, Sliding Window Normalization: SWN, L2Norm]
     merge_strategys = None     #'mean'、'max'、'min'、'median'、'sum'、'variance'、'std'、'range'  None
     lr = 0.001
 
     # 新增正则化类型参数
-    regularization_type = 'L2'  # 选择 L1, L2, CL（L1+L2组合）, NL（无L1和L2）
+    regularization_type = 'CL'  # 选择 L1, L2, CL（L1+L2组合）, NL（无L1和L2）
     lambda_l1 = 1e-5  # L1正则化强度
     lambda_l2 = 1e-4  # L2正则化强度
 
@@ -165,6 +165,8 @@ def main():
         # 支持多GPU训练
         if torch.cuda.device_count() > 1:
             device_ids = [0, 1, 2, 3, 4, 5, 6, 7]  # 例如使用 2 个 GPU
+            # device_ids = [0, 1, 2, 3]  # 例如使用 2 个 GPU
+            # device_ids = [0]  # 例如使用 2 个 GPU
             # model1 = nn.DataParallel(model1, device_ids=device_ids)
             model2 = nn.DataParallel(model2, device_ids=device_ids)
 

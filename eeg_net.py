@@ -14,6 +14,203 @@ class Conv2dWithConstraint(nn.Conv2d):
             self.weight.data = torch.renorm(self.weight.data, 2, 0, self.max_norm)
         return super().forward(x)
 
+class SELayer(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(SELayer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid(),
+        )
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+class ChannelAttention(nn.Module):
+    def __init__(self, in_planes, ratio=2):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+        self.fc = nn.Sequential(
+            nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False),
+            nn.ReLU(),
+            nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False),
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return self.sigmoid(out) #8X8X1X1
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = x.mean(dim=1, keepdim=True)
+        max_out = x.max(dim=1, keepdim=True)[0]
+        x = torch.cat([avg_out, max_out], dim=1)
+        x = self.conv1(x)
+        return self.sigmoid(x)
+
+class CBAMLayer(nn.Module):
+    def __init__(self, planes):
+        super().__init__()
+        self.ca = ChannelAttention(planes)
+        self.sa = SpatialAttention()
+
+    def forward(self, x):
+        # x = self.ca(x) * x
+        # x = self.sa(x) * x
+        #exchange
+        x = self.sa(x) * x
+        x = self.ca(x) * x
+
+        return x
+
+class CALayer(nn.Module):
+    def __init__(self, inplace, reduction=32):
+        super().__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+        hidden_dim = max(8, inplace // reduction)
+        self.conv1 = nn.Conv2d(inplace, hidden_dim, kernel_size=1, stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2d(hidden_dim)
+        self.act = h_swish()
+        self.conv_h = nn.Conv2d(hidden_dim, inplace, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(hidden_dim, inplace, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        identity = x
+        b, c, h, w = x.shape
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+        x_h, x_w = torch.split(y, [h, w], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+        a_h = self.conv_h(x_h).sigmoid()
+        a_w = self.conv_w(x_w).sigmoid()
+        out = identity * a_h * a_w
+        return out
+class h_sigmoid(nn.Module):
+    def __init__(self, inplace=True):
+        super(h_sigmoid, self).__init__()
+        self.relu = nn.ReLU6(inplace=inplace)
+
+    def forward(self, x):
+        return self.relu(x + 3) / 6
+
+class h_swish(nn.Module):
+    def __init__(self, inplace=True):
+        super(h_swish, self).__init__()
+        self.sigmoid = h_sigmoid(inplace=inplace)
+
+    def forward(self, x):
+        return x * self.sigmoid(x)
+def get_attn_type(
+    attn_name,
+    planes,
+):
+    if attn_name == "se":
+        reduction = 16
+        return SELayer(planes, reduction)
+    elif attn_name == "cbam":
+        return CBAMLayer(planes)
+    elif attn_name == "ca":
+        return CALayer(planes)
+    else:
+        return nn.Identity()
+def get_act_type(act_name):
+    if act_name == "elu":
+        return nn.ELU(inplace=True)
+    elif act_name == "silu":
+        return nn.SiLU(inplace=True)
+    else:
+        return nn.ReLU(inplace=True)
+
+class AttenEEGNet(nn.Module):
+    def __init__(self, F1=8, F2=16, D=2, K1=64, K2=16, n_timesteps=1000, n_electrodes=127, n_classes=50, dropout=0.5, attn_name = 'cbam', act_name = 'relu'):
+        super().__init__()
+
+        self.zoe1 = nn.ZeroPad2d((K1 // 2, K1 // 2 - 1, 0, 0))
+        self.conv1 = nn.Conv2d(1, F1, (1, K1), bias=False)
+        self.bn1 = nn.BatchNorm2d(F1)
+
+        self.conv2 = Conv2dWithConstraint(F1, F1 * D, (n_electrodes, 1), bias=False, groups=F1)
+        self.bn2 = nn.BatchNorm2d(F1 * D)
+
+        self.act1 = nn.ELU()
+
+        self.pool1 = nn.AvgPool2d((1, 4))
+        self.dropout1 = nn.Dropout(dropout)
+
+        self.zoe3 = nn.ZeroPad2d((K2 // 2, K2 // 2 - 1, 0, 0))
+        self.conv3 = nn.Conv2d(F1 * D, F1 * D, (1, K2), bias=False, groups=F1 * D)
+        self.conv4 = nn.Conv2d(F1 * D, F2, 1, bias=False)
+        self.bn3 = nn.BatchNorm2d(F2)
+
+        self.act2 = nn.ELU()
+
+        self.pool2 = nn.AvgPool2d((1, 8))
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.flatten = nn.Flatten()
+
+        self.fc = nn.Linear(F2 * (n_timesteps // 32), n_classes)
+
+
+        self.attn1 = get_attn_type(attn_name, F1)
+        self.attn2 = get_attn_type(attn_name, F1 * D)
+        self.attn3 = get_attn_type(attn_name, F2)
+        self.act = get_act_type(act_name)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # identity1 = x
+        x = self.zoe1(x)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.attn1(x)
+        # x += identity1
+        x = self.act(x)
+
+        # identity2 = x
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.attn2(x)
+        # x += identity2
+        x = self.act1(x)
+
+
+        x = self.pool1(x)
+        x = self.dropout1(x)
+        x = self.zoe3(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.bn3(x)
+        x = self.attn3(x)
+        x = self.act2(x)
+
+        x = self.pool2(x)
+        x = self.dropout2(x)
+
+        x = self.flatten(x)
+        x = self.fc(x)
+        return x
+
+
+
+
+
 class EEGNet(nn.Module):
     def __init__(self, F1=8, F2=16, D=2, K1=64, K2=16, n_timesteps=1000, n_electrodes=127, n_classes=50, dropout=0.5):
         super().__init__()
@@ -66,10 +263,69 @@ class EEGNet(nn.Module):
 
         x = self.flatten(x)
         x = self.fc(x)
-        # x = torch.sigmoid(x)
-
-        # return x.squeeze(1)
         return x
+
+class EEGNetTimeWeight(nn.Module):
+    def __init__(self, F1=8, F2=16, D=2, K1=64, K2=16, n_timesteps=1000, n_electrodes=127, n_classes=50, dropout=0.5):
+        super().__init__()
+
+        self.zoe1 = nn.ZeroPad2d((K1 // 2, K1 // 2 - 1, 0, 0))
+        self.conv1 = nn.Conv2d(1, F1, (1, K1), bias=False)
+        self.bn1 = nn.BatchNorm2d(F1)
+
+        self.conv2 = Conv2dWithConstraint(F1, F1 * D, (n_electrodes, 1), bias=False, groups=F1)
+        self.bn2 = nn.BatchNorm2d(F1 * D)
+
+        self.act1 = nn.ELU()
+
+        self.pool1 = nn.AvgPool2d((1, 4))
+        self.dropout1 = nn.Dropout(dropout)
+
+        self.zoe3 = nn.ZeroPad2d((K2 // 2, K2 // 2 - 1, 0, 0))
+        self.conv3 = nn.Conv2d(F1 * D, F1 * D, (1, K2), bias=False, groups=F1 * D)
+        self.conv4 = nn.Conv2d(F1 * D, F2, 1, bias=False)
+        self.bn3 = nn.BatchNorm2d(F2)
+
+        self.act2 = nn.ELU()
+
+        self.pool2 = nn.AvgPool2d((1, 8))
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.flatten = nn.Flatten()
+
+        self.fc = nn.Linear(F2 * (n_timesteps // 32), n_classes)
+        self.time_weights = nn.Parameter(torch.ones(n_timesteps))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch_size, 1, input_size, seq_length)
+
+        # 1. 对时间维度 (最后一维) 进行加权
+        # 将时间权重扩展到与输入形状一致 (batch_size, 1, input_size, seq_length)
+        time_weighted_x = x * self.time_weights.unsqueeze(0).unsqueeze(0).unsqueeze(1)
+
+        x = self.zoe1(time_weighted_x)
+        x = self.conv1(x)
+        x = self.bn1(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.act1(x)
+
+        x = self.pool1(x)
+        x = self.dropout1(x)
+        x = self.zoe3(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.bn3(x)
+        x = self.act2(x)
+
+        x = self.pool2(x)
+        x = self.dropout2(x)
+
+        x = self.flatten(x)
+        x = self.fc(x)
+        return x
+
 
 class EEGNet_Double_FC(nn.Module):
     def __init__(self, F1=8, F2=16, D=2, K1=64, K2=16, n_timesteps=1000, n_electrodes=127, n_classes1=50, n_classes2=2, dropout=0.5):
