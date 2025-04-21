@@ -18,14 +18,14 @@ def modify_resnet(model, num_classes=50):
 
     return model
 
-def get_model(num_classes, model_name,n_timestep):
+def get_model(num_classes, model_name, n_timestep, dropout):#之前是0.6
 
     if model_name == 'EEGNet':
-        model = EEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=0.6)
+        model = EEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=dropout)
     elif model_name == 'AttenEEGNet':
-        model = AttenEEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=0.6)
+        model = AttenEEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=dropout)
     elif model_name == 'EEGNetTimeWeight':
-        model = EEGNetTimeWeight(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=0.6)
+        model = EEGNetTimeWeight(n_timesteps=n_timestep, n_electrodes=126, n_classes=num_classes, dropout=dropout)
     elif model_name == 'classifier_EEGNet':
         model = classifier_EEGNet(temporal=n_timestep)
     elif model_name == 'classifier_SyncNet':

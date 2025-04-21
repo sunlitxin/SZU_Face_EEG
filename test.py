@@ -1,94 +1,105 @@
-import pickle
-import os
-import torch
+# import torch
+# from vit_pytorch import ViT
+#
+#
+#
+# v = ViT(
+#     image_size = 224,
+#     patch_size = 32,
+#     num_classes = 50,
+#     dim = 1024,
+#     depth = 6,
+#     heads = 16,
+#     mlp_dim = 2048,
+#     dropout = 0.1,
+#     emb_dropout = 0.1
+# )
+#
+# img = torch.randn(1, 3, 224, 224)
+#
+# preds = v(img) # (1, 1000)
+# print(preds)
+#
+# #1560X126
 
-import torch.optim as optim
-from torch import nn
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import KFold
 
-from eeg_net import EEGNet
+import numpy as np
+
+import numpy as np
+
+import numpy as np
+
+def sliding_window_augmentation(x, window_length=200, stride=200, method=None):
+    """
+    对脑电数据应用滑动窗口数据增强，并可选地对滑动窗口的片段进行叠加处理。
+
+    :param x: 输入数据，形状为 (刺激数量, 时间步长, 通道数)
+    :param window_length: 滑动窗口的长度
+    :param stride: 窗口的步幅
+    :param method: 叠加方式，可选 'mean'、'max'、'min'、'median'、'sum'、'variance'、'std'、'range'，为 None 时不进行叠加
+    :return: 使用滑动窗口增强并叠加后的数据，形状为 (刺激数量, 窗口长度, 通道数)
+    """
+    num_trials, num_time_steps, num_channels = x.shape
+
+    # 计算滑动窗口的数量
+    num_windows = (num_time_steps - window_length) // stride + 1
+
+    # 初始化增强后的数据列表
+    augmented_data = []
+
+    for i in range(num_trials):
+        trial_data = x[i]
+        for start in range(0, num_time_steps - window_length + 1, stride):
+            end = start + window_length
+            windowed_data = trial_data[start:end]
+            augmented_data.append(windowed_data)
+
+    # 转换为 numpy 数组
+    augmented_data = np.array(augmented_data)
+
+    # 如果 method 为 None，则直接返回增强后的数据片段，形状为 (窗口数量, 窗口长度, 通道数)
+    if method is None:
+        return augmented_data
+
+    # 否则进行叠加处理，将所有片段叠加为一个与 window_length 相同的片段
+    # 初始化叠加后的数据数组，大小为 (num_trials, window_length, num_channels)
+    combined_data = np.zeros((num_trials, window_length, num_channels))
+
+    # 对每个试验分别进行叠加
+    for i in range(num_trials):
+        # 取出当前试验的所有窗口片段
+        trial_windows = augmented_data[i * num_windows:(i + 1) * num_windows]
+
+        if method == 'mean':
+            combined_data[i] = np.mean(trial_windows, axis=0)
+        elif method == 'max':
+            combined_data[i] = np.max(trial_windows, axis=0)
+        elif method == 'min':
+            combined_data[i] = np.min(trial_windows, axis=0)
+        elif method == 'median':
+            combined_data[i] = np.median(trial_windows, axis=0)
+        elif method == 'sum':
+            combined_data[i] = np.sum(trial_windows, axis=0)
+        elif method == 'variance':
+            combined_data[i] = np.var(trial_windows, axis=0)
+        elif method == 'std':
+            combined_data[i] = np.std(trial_windows, axis=0)
+        elif method == 'range':
+            combined_data[i] = np.ptp(trial_windows, axis=0)  # ptp = peak to peak, 即 max - min
+
+    return combined_data
 
 
-# 加载PKL文件数据的函数
-def load_pkl_data(pkl_file_path):
-    with open(pkl_file_path, 'rb') as f:
-        data, labels = pickle.load(f)
-    return data, labels
 
-# 自定义Dataset类
-class EEGDataset(Dataset):
-    def __init__(self, pkl_file_paths):
-        self.data = []
-        self.labels = []
-        for pkl_file in pkl_file_paths:
-            data, labels = load_pkl_data(pkl_file)
-            self.data.append(data)
-            self.labels.append(labels)
+if __name__ == '__main__':
+    # 假设输入数据形状为 (10, 1000, 64)
+    x = np.random.randn(10, 1000, 64)
 
-        # 将所有数据和标签合并到一个张量中
-        self.data = torch.cat(self.data, dim=0)
-        self.labels = torch.cat(self.labels, dim=0)
+    # 使用滑动窗口增强，不进行叠加
+    augmented_data_no_combine = sliding_window_augmentation(x, window_length=200, stride=200, method=None)
 
-    def __len__(self):
-        return len(self.labels)
+    # 使用滑动窗口增强并叠加，取平均值
+    augmented_data_mean = sliding_window_augmentation(x, window_length=200, stride=200, method='mean')
 
-    def __getitem__(self, idx):
-        return self.data[idx], self.labels[idx]
-
-# 创建数据加载器的函数
-def create_dataloader(data, labels, batch_size=32, shuffle=True, num_workers=4):
-    dataset = EEGDataset([])
-    dataset.data = data
-    dataset.labels = labels
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
-    return dataloader
-
-# 设定PKL文件路径列表
-base_path = '/data0/xinyang/SZU_Face_EEG/small'
-# base_path = '/data0/xinyang/SZU_Face_EEG/small_eeg'
-output_pkl_dir = os.path.join(base_path, 'pkl')
-
-pkl_file_paths = [os.path.join(output_pkl_dir, file) for file in os.listdir(output_pkl_dir) if file.endswith('.pkl')]
-n_timestep = 100
-# 加载所有数据到EEGDataset
-dataset = EEGDataset(pkl_file_paths)
-
-# 使用KFold进行交叉验证
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
-model = EEGNet(n_timesteps=n_timestep, n_electrodes=127, n_classes=50)
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-for fold, (train_index, val_index) in enumerate(kf.split(dataset)):
-    print(f"Fold {fold + 1}")
-
-    # 根据索引分割数据
-    train_data = dataset.data[train_index]
-    train_labels = dataset.labels[train_index]
-    val_data = dataset.data[val_index]
-    val_labels = dataset.labels[val_index]
-
-    # 创建训练和验证的DataLoader
-    train_loader = create_dataloader(train_data, train_labels, batch_size=32, shuffle=True, num_workers=4)
-    val_loader = create_dataloader(val_data, val_labels, batch_size=32, shuffle=False, num_workers=4)
-
-    # 训练模型
-    for epoch in range(10):
-        model.train()
-        for batch_data, batch_labels in train_loader:
-            optimizer.zero_grad()
-            outputs = model(batch_data)
-            loss = criterion(outputs, batch_labels)
-            loss.backward()
-            optimizer.step()
-
-        # 验证模型
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for batch_data, batch_labels in val_loader:
-                outputs = model(batch_data)
-                loss = criterion(outputs, batch_labels)
-                val_loss += loss.item()
-
-        print(f"Validation Loss for Fold {fold + 1}, Epoch {epoch + 1}: {val_loss / len(val_loader)}")
+    # 使用滑动窗口增强并叠加，取最大值
+    augmented_data_max = sliding_window_augmentation(x, window_length=200, stride=200, method='max')

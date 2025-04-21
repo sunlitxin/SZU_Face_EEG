@@ -42,11 +42,20 @@ class ChannelAttention(nn.Module):
         )
         self.sigmoid = nn.Sigmoid()
 
+    # def forward(self, x):
+    #     avg_out = self.fc(self.avg_pool(x))
+    #     max_out = self.fc(self.max_pool(x))
+    #     out = avg_out + max_out
+    #     return self.sigmoid(out) #8X8X1X1
+
     def forward(self, x):
-        avg_out = self.fc(self.avg_pool(x))
-        max_out = self.fc(self.max_pool(x))
+        # 使用 permute 交换维度
+        x_permuted = x.permute(0, 2, 1, 3)  # [8, 126, 8, 100]
+        avg_out = self.fc(self.avg_pool(x_permuted))
+        max_out = self.fc(self.max_pool(x_permuted))
         out = avg_out + max_out
-        return self.sigmoid(out) #8X8X1X1
+        out = out.permute(0, 2, 1, 3)
+        return self.sigmoid(out)
 class SpatialAttention(nn.Module):
     def __init__(self, kernel_size=7):
         super(SpatialAttention, self).__init__()
@@ -170,7 +179,8 @@ class AttenEEGNet(nn.Module):
         self.fc = nn.Linear(F2 * (n_timesteps // 32), n_classes)
 
 
-        self.attn1 = get_attn_type(attn_name, F1)
+        # self.attn1 = get_attn_type(attn_name, F1)
+        self.attn1 = get_attn_type(attn_name, n_electrodes)
         self.attn2 = get_attn_type(attn_name, F1 * D)
         self.attn3 = get_attn_type(attn_name, F2)
         self.act = get_act_type(act_name)
@@ -186,7 +196,7 @@ class AttenEEGNet(nn.Module):
         # identity2 = x
         x = self.conv2(x)
         x = self.bn2(x)
-        x = self.attn2(x)
+        # x = self.attn2(x)
         # x += identity2
         x = self.act1(x)
 
@@ -197,7 +207,7 @@ class AttenEEGNet(nn.Module):
         x = self.conv3(x)
         x = self.conv4(x)
         x = self.bn3(x)
-        x = self.attn3(x)
+        # x = self.attn3(x)
         x = self.act2(x)
 
         x = self.pool2(x)

@@ -30,14 +30,14 @@ torch.backends.cudnn.benchmark = False
 random.seed(seed)
 np.random.seed(seed)
 
-def setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target, merge_strategys, lr, regularization_type): #[200,800,200] [n_timestep, n_timestep_end, stride ]
+def setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target, merge_strategys, lr, regularization_type, dropout): #[200,800,200] [n_timestep, n_timestep_end, stride ]
     n_timestep, n_timestep_end, stride = n_timestep_list
     log_dir_name = f'{datadirname}'
     log_dir = os.path.join(log_dir_name)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     #log_filename = os.path.join(log_dir, f'{datadirname}-{n_timestep}-single_back.log')
-    log_filename = os.path.join(log_dir, f'{model_name}-({n_timestep},{n_timestep_end},{stride})-{loss_name}-{norm_type}-{merge_strategys}-{classification_target}-lr{lr}-{regularization_type}.log')
+    log_filename = os.path.join(log_dir, f'{model_name}-({n_timestep},{n_timestep_end},{stride})-{loss_name}-{norm_type}-{merge_strategys}-{classification_target}-lr{lr}-{regularization_type}-dropout{dropout}--new--.log')
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s %(message)s')
     logging.info(f'recode_name:{log_filename}')
     logging.info('train by double_learn.py')
@@ -69,12 +69,12 @@ def main():
     # model_name = args.model
     model_name = 'AttenEEGNet'  #AttenEEGNet   EEGNetTimeWeight    EEGNet
     file_prefix = args.prefix
-    n_timestep_list = [100, 100, 100]  #n_timestep, n_timestep_end, stride
+    n_timestep_list = [500, 1000, 500]  #n_timestep, n_timestep_end, stride
     classification_target = 'id' # sex or id
     norm_type = 'Channel-wise Normalization'  ## [Global Normalization: GN, Channel-wise Normalization: CN, Time-step Normalization: TN, Sliding Window Normalization: SWN, L2Norm]
     merge_strategys = None     #'mean'、'max'、'min'、'median'、'sum'、'variance'、'std'、'range'  None
-    lr = 0.001
-
+    lr = 0.002
+    dropout = 0.5
     # 新增正则化类型参数
     regularization_type = 'CL'  # 选择 L1, L2, CL（L1+L2组合）, NL（无L1和L2）
     lambda_l1 = 1e-5  # L1正则化强度
@@ -89,7 +89,7 @@ def main():
 
 
     # Setup logging
-    setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target, merge_strategys, lr, regularization_type)
+    setup_logging(model_name, loss_name, n_timestep_list, datadirname, norm_type, classification_target, merge_strategys, lr, regularization_type, dropout)
 
     mapping = {
         0: 0, 1: 0, 2: 0, 3: 1, 4: 1,
@@ -151,7 +151,7 @@ def main():
         print(f"FOLD {fold + 1}")
 
         # 实例化模型
-        model2 = get_model(num_classes=num_classes, model_name=model_name, n_timestep=n_timestep)
+        model2 = get_model(num_classes=num_classes, model_name=model_name, n_timestep=n_timestep, dropout=dropout)
 
         # 根据 regularization_type 选择是否加入 L2 正则化
         if regularization_type in ['L2', 'CL']:

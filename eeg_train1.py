@@ -205,8 +205,8 @@ def main():
     datadirname = 'New_FaceEEG'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
     # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
-    base_path = os.path.join(base_path0, datadirname)
-    # base_path = '/data0/xinyang/SZU_Face_EEG/small'#
+    # base_path = os.path.join(base_path0, datadirname)
+    base_path = '/data0/xinyang/SZU_Face_EEG/small_new'
     # base_path = '/data0/xinyang/SZU_Face_EEG/small_eeg'
     edf_files = find_edf_and_markers_files(base_path, file_prefix)
 
@@ -226,7 +226,7 @@ def main():
             logging.info(f"Markers file for {edf_file_path} does not exist. Skipping.")
             continue
 
-        eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep)
+        eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep) #tensor[1200, 1, 127, 500]
         print('-------------------')
 
         if eeg_data is None or labels is None:

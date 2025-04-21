@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="xinyang@172.31.224.73:22003 password" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="xinyang@172.31.224.73:22003 password (15)" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false">
     <option name="confirmBeforeUploading" value="false" />
     <serverData>
       <paths name="SZU_Face_EEG">
@@ -25,6 +25,27 @@
         </serverdata>
       </paths>
       <paths name="xinyang@172.31.224.73:22 password (2)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 DECA">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 NICE_EEG">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/data0/xinyang/mapping/SZU_Face_EEG" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 diffusion">
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />
@@ -77,13 +98,6 @@
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />
-          </mappings>
-        </serverdata>
-      </paths>
-      <paths name="xinyang@172.31.224.73:22003 password (15)">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/data0/xinyang/mapping/SZU_Face_EEG" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>
