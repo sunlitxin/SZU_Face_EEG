@@ -309,7 +309,7 @@ def main():
 
     # base_path = '/data0/xinyang/SZU_Face_EEG/new_eeg_xy'
 
-    base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG2025_export_small'
+    base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG2025_export'
 
     # base_path = os.path.join(base_path0, datadirname)
     # base_path = '/data0/xinyang/SZU_Face_EEG/small_new'
