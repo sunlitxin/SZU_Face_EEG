@@ -1,105 +1,125 @@
+import os
+import numpy as np
+import torch
+#
+#存放 .npy 文件的路径
+eeg_data_dir = '/data0/xinyang/train_arcface/processed_data/eeg_datas'
+img_future_dir = '/data0/xinyang/train_arcface/processed_data/image_features_new'
+
+# 遍历所有 .npy 文件
+for filename in sorted(os.listdir(eeg_data_dir)):
+    if not filename.endswith('.npy'):
+        continue
+
+    file_path = os.path.join(eeg_data_dir, filename)
+    print(f"\n📂 正在读取文件：{filename}")
+
+    # 加载数据
+    data = np.load(file_path, allow_pickle=True).item()  # 必须加 .item()
+    eeg_data = data['eeg_data']  # shape: (N, 1, 126, 500)
+    labels = data['labels']      # shape: (N,)
+
+    # 转为 Tensor（可选）
+    eeg_data = torch.tensor(eeg_data, dtype=torch.float32)
+    labels = torch.tensor(labels, dtype=torch.long)
+
+    # 打印维度和前几个值
+    print(f"EEG 数据形状: {eeg_data.shape}")  # 例如: torch.Size([40, 1, 126, 500])
+    print(f"标签形状: {labels.shape}")        # 例如: torch.Size([40])，每个样本对应一个标签
+    print(f"前30个标签: {labels[:30].tolist()}")
+    print(f"第1个样本的EEG片段 shape: {eeg_data[0].shape}")  # torch.Size([1, 126, 500])
+
+for filename in sorted(os.listdir(img_future_dir)):
+    if not filename.endswith('.npz'):
+        continue
+
+    file_path = os.path.join(img_future_dir, filename)
+    print(f"\n📂 正在读取文件：{filename}")
+
+    # 加载数据
+    img_data = np.load(file_path) # 必须加 .item()
+    features = img_data['features']  # 特征数据
+    img_labels = img_data['labels']  # 标签数据
+    # 转为 Tensor（可选）
+    features = torch.tensor(features, dtype=torch.float32)
+    img_labels = torch.tensor(img_labels, dtype=torch.long)
+
+    # 打印维度和前几个值
+    print(f"EEG 数据形状: {features.shape}")  # 例如: torch.Size([40, 1, 126, 500])
+    print(f"标签形状: {img_labels.shape}")        # 例如: torch.Size([40])，每个样本对应一个标签
+    print(f"前30个标签: {img_labels[:30].tolist()}")
+    print(f"第1个样本的EEG片段 shape: {features[0].shape}")  # torch.Size([1, 126, 500])
+#
+# # 加载 npz 文件
+# data = np.load(r"/data0/xinyang/train_arcface/processed_data/image_data_2_new.npz")
+#
+# # 取出里面的内容
+# images = data['images']  # 图片数据，shape = (N,112,112,3)
+# labels = data['labels']  # 标签数据，shape = (N,)
+# names = data['names']    # 图片名字，shape = (N,)
+#
+# print(images.shape)  # 比如 (3200,112,112,3)
+# print(labels.shape)  # 比如 (3200,)
+# print(names.shape)   # 比如 (3200,)
+# print(f"前30个标签: {labels[:30].tolist()}")
+
+# import os
+# import numpy as np
 # import torch
-# from vit_pytorch import ViT
+# import re
+# import pandas as pd
 #
+# # 文件路径
+# eeg_data_dir = '/data0/xinyang/train_arcface/processed_data/eeg_datas'
+# img_feature_dir = '/data0/xinyang/train_arcface/processed_data/image_features_new'
+# output_excel_path = 'label_comparison.xlsx'
 #
+# # 获取 EEG 和图像特征文件的编号对应映射
+# eeg_files = {re.search(r'(\d+)', f).group(1): f for f in os.listdir(eeg_data_dir) if f.endswith('.npy')}
+# img_files = {re.search(r'(\d+)', f).group(1): f for f in os.listdir(img_feature_dir) if f.endswith('.npz')}
 #
-# v = ViT(
-#     image_size = 224,
-#     patch_size = 32,
-#     num_classes = 50,
-#     dim = 1024,
-#     depth = 6,
-#     heads = 16,
-#     mlp_dim = 2048,
-#     dropout = 0.1,
-#     emb_dropout = 0.1
-# )
+# # 获取交集编号
+# common_ids = sorted(set(eeg_files.keys()) & set(img_files.keys()), key=lambda x: int(x))
 #
-# img = torch.randn(1, 3, 224, 224)
+# # 创建一个ExcelWriter对象（使用xlsxwriter）
+# with pd.ExcelWriter(output_excel_path, engine='xlsxwriter') as writer:
+#     workbook = writer.book
+#     red_format = workbook.add_format({'bg_color': '#FF0000'})  # 红色高亮格式
 #
-# preds = v(img) # (1, 1000)
-# print(preds)
+#     for idx in common_ids:
+#         eeg_file = eeg_files[idx]
+#         img_file = img_files[idx]
 #
-# #1560X126
-
-
-import numpy as np
-
-import numpy as np
-
-import numpy as np
-
-def sliding_window_augmentation(x, window_length=200, stride=200, method=None):
-    """
-    对脑电数据应用滑动窗口数据增强，并可选地对滑动窗口的片段进行叠加处理。
-
-    :param x: 输入数据，形状为 (刺激数量, 时间步长, 通道数)
-    :param window_length: 滑动窗口的长度
-    :param stride: 窗口的步幅
-    :param method: 叠加方式，可选 'mean'、'max'、'min'、'median'、'sum'、'variance'、'std'、'range'，为 None 时不进行叠加
-    :return: 使用滑动窗口增强并叠加后的数据，形状为 (刺激数量, 窗口长度, 通道数)
-    """
-    num_trials, num_time_steps, num_channels = x.shape
-
-    # 计算滑动窗口的数量
-    num_windows = (num_time_steps - window_length) // stride + 1
-
-    # 初始化增强后的数据列表
-    augmented_data = []
-
-    for i in range(num_trials):
-        trial_data = x[i]
-        for start in range(0, num_time_steps - window_length + 1, stride):
-            end = start + window_length
-            windowed_data = trial_data[start:end]
-            augmented_data.append(windowed_data)
-
-    # 转换为 numpy 数组
-    augmented_data = np.array(augmented_data)
-
-    # 如果 method 为 None，则直接返回增强后的数据片段，形状为 (窗口数量, 窗口长度, 通道数)
-    if method is None:
-        return augmented_data
-
-    # 否则进行叠加处理，将所有片段叠加为一个与 window_length 相同的片段
-    # 初始化叠加后的数据数组，大小为 (num_trials, window_length, num_channels)
-    combined_data = np.zeros((num_trials, window_length, num_channels))
-
-    # 对每个试验分别进行叠加
-    for i in range(num_trials):
-        # 取出当前试验的所有窗口片段
-        trial_windows = augmented_data[i * num_windows:(i + 1) * num_windows]
-
-        if method == 'mean':
-            combined_data[i] = np.mean(trial_windows, axis=0)
-        elif method == 'max':
-            combined_data[i] = np.max(trial_windows, axis=0)
-        elif method == 'min':
-            combined_data[i] = np.min(trial_windows, axis=0)
-        elif method == 'median':
-            combined_data[i] = np.median(trial_windows, axis=0)
-        elif method == 'sum':
-            combined_data[i] = np.sum(trial_windows, axis=0)
-        elif method == 'variance':
-            combined_data[i] = np.var(trial_windows, axis=0)
-        elif method == 'std':
-            combined_data[i] = np.std(trial_windows, axis=0)
-        elif method == 'range':
-            combined_data[i] = np.ptp(trial_windows, axis=0)  # ptp = peak to peak, 即 max - min
-
-    return combined_data
+#         eeg_path = os.path.join(eeg_data_dir, eeg_file)
+#         eeg_data_dict = np.load(eeg_path, allow_pickle=True).item()
+#         labels = torch.tensor(eeg_data_dict['labels'], dtype=torch.long)
+#
+#         img_path = os.path.join(img_feature_dir, img_file)
+#         img_data = np.load(img_path)
+#         img_labels = torch.tensor(img_data['labels'], dtype=torch.long)
+#
+#         # 转成列表方便处理
+#         eeg_list = labels.tolist()
+#         img_list = img_labels.tolist()
+#
+#         sheet_name = f'id_{idx}'
+#         worksheet = writer.book.add_worksheet(sheet_name)
+#         writer.sheets[sheet_name] = worksheet
+#
+#         # 写表头
+#         worksheet.write(0, 0, 'eeg_label')
+#         worksheet.write(0, 1, 'img_label')
+#
+#         # 写入标签数据并对比，标红不一致项
+#         for row_num, (eeg_val, img_val) in enumerate(zip(eeg_list, img_list), start=1):  # 从Excel第2行开始（0是表头）
+#             if eeg_val != img_val:
+#                 worksheet.write(row_num, 0, eeg_val, red_format)
+#                 worksheet.write(row_num, 1, img_val, red_format)
+#             else:
+#                 worksheet.write(row_num, 0, eeg_val)
+#                 worksheet.write(row_num, 1, img_val)
+#
+# print(f"\n✅ 标签对比写入并完成高亮：{output_excel_path}")
 
 
 
-if __name__ == '__main__':
-    # 假设输入数据形状为 (10, 1000, 64)
-    x = np.random.randn(10, 1000, 64)
-
-    # 使用滑动窗口增强，不进行叠加
-    augmented_data_no_combine = sliding_window_augmentation(x, window_length=200, stride=200, method=None)
-
-    # 使用滑动窗口增强并叠加，取平均值
-    augmented_data_mean = sliding_window_augmentation(x, window_length=200, stride=200, method='mean')
-
-    # 使用滑动窗口增强并叠加，取最大值
-    augmented_data_max = sliding_window_augmentation(x, window_length=200, stride=200, method='max')

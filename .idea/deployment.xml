@@ -38,13 +38,6 @@
           </mappings>
         </serverdata>
       </paths>
-      <paths name="xinyang@172.31.224.73:22003 NICE_EEG">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/data0/xinyang/mapping/SZU_Face_EEG" local="$PROJECT_DIR$" />
-          </mappings>
-        </serverdata>
-      </paths>
       <paths name="xinyang@172.31.224.73:22003 diffusion">
         <serverdata>
           <mappings>
@@ -101,6 +94,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (15)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="xinyang@172.31.224.73:22003 password (16)">
         <serverdata>
           <mappings>
@@ -108,7 +108,70 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (17)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (18)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (19)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="xinyang@172.31.224.73:22003 password (2)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (20)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (21)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (22)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (23)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (25)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="xinyang@172.31.224.73:22003 password (26)">
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />

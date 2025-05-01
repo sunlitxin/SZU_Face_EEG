@@ -48,7 +48,7 @@ def main():
     file_prefix = args.prefix
 
     single_back = False   #True: single back   False: sum back
-    n_timestep = 500
+    n_timestep = 400
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
     datadirname = 'New_FaceEEG'

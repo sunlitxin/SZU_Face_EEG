@@ -15,7 +15,7 @@ import time  # 添加时间模块
 from Criterions import NewCrossEntropy
 from eeg_net import EEGNet, classifier_EEGNet, classifier_SyncNet, classifier_CNN, classifier_EEGChannelNet
 from losses import XYLoss, ArcFace
-
+import xml.etree.ElementTree as ET
 seed = 1234
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
@@ -104,17 +104,54 @@ class MNEReader(object):
         return stim_epochs.get_data().transpose(0, 2, 1)
 
 
+# def ziyan_read(file_path):
+#     with open(file_path) as f:
+#         stim = []
+#         target_class = []
+#         for line in f.readlines():
+#             if line.strip().startswith('Stimulus'):
+#                 line = line.strip().split(',')
+#                 classes = int(line[1][-2:])
+#                 time = int(line[2].strip())
+#                 stim.append(time)
+#                 target_class.append(classes)
+#     return stim, target_class
+
 def ziyan_read(file_path):
-    with open(file_path) as f:
-        stim = []
-        target_class = []
-        for line in f.readlines():
-            if line.strip().startswith('Stimulus'):
-                line = line.strip().split(',')
-                classes = int(line[1][-2:])
-                time = int(line[2].strip())
-                stim.append(time)
-                target_class.append(classes)
+    stim = []
+    target_class = []
+
+    try:
+        # 解析 XML 文件
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+
+        # 提取命名空间
+        ns = {'ns': 'http://www.brainproducts.com/MarkerSet'}
+
+        # 遍历所有 <Marker> 元素
+        for marker in root.findall('.//ns:Marker', ns):  # 使用命名空间查找 Marker
+            # 获取 <Type>， <Description> 和 <Position>
+            marker_type = marker.find('ns:Type', ns).text
+            description = marker.find('ns:Description', ns).text
+            position = int(marker.find('ns:Position', ns).text)
+
+            # 只处理 Stimulus 类型的 Marker
+            if marker_type == 'Stimulus' and description:
+                # 提取类别信息，通常在 Description 中以 "S" 开头
+                class_str = description.strip().split()[-1]  # 获取类别，去掉前缀 "S"
+                if class_str.isdigit():
+                    classes = int(class_str)
+                    stim.append(position)
+                    target_class.append(classes)
+
+    except Exception as e:
+        print(f"Error reading file {file_path}: {e}")
+
+    # 打印前几个刺激信息用于调试
+    print(f"Stimulus list: {stim[:10]}")
+    print(f"Target class list: {target_class[:10]}")
+
     return stim, target_class
 
 
@@ -128,49 +165,114 @@ def find_edf_and_markers_files(base_path, file_prefix=None):
                 'markers': os.path.join(base_path, base_name + '.Markers')
             }
     return edf_files
+#不够长用最后一行补齐
+# def pad_last_array(x, n_timestep):
+#     # 确保最后一个数组的形状为 (99, 127)
+#     if x[-1].shape[0] != n_timestep and x[-1].shape[1] == 127:
+#         # 获取前一个数组，用于补全
+#         last_row = x[-1][-1:]
+#
+#         # 用最后一行进行补全
+#         padding = last_row
+#
+#         # 将补全后的数组重新赋值给最后一个元素
+#         x[-1] = np.vstack((x[-1], padding))
+#     return x
 
+#不够长用0补齐
 def pad_last_array(x, n_timestep):
-    # 确保最后一个数组的形状为 (99, 127)
-    if x[-1].shape[0] != n_timestep and x[-1].shape[1] == 127:
-        # 获取前一个数组，用于补全
-        last_row = x[-1][-1:]
+    """
+    补齐最后一个样本的时间步长到指定长度 n_timestep。
+    使用零填充而非重复最后一行，避免数据偏移。
 
-        # 用最后一行进行补全
-        padding = last_row
+    Args:
+        x (list of np.ndarray): 每个元素形状为 (time, channels)
+        n_timestep (int): 目标时间步数
 
-        # 将补全后的数组重新赋值给最后一个元素
-        x[-1] = np.vstack((x[-1], padding))
+    Returns:
+        list of np.ndarray: 补齐后的列表
+    """
+    if x and x[-1].shape[0] < n_timestep:
+        time_len, n_channels = x[-1].shape
+        pad_len = n_timestep - time_len
+        # 构造零填充部分
+        zero_pad = np.zeros((pad_len, n_channels), dtype=x[-1].dtype)
+        # 拼接补齐
+        x[-1] = np.concatenate([x[-1], zero_pad], axis=0)
     return x
-def load_and_preprocess_data(edf_file_path, label_file_path, stim_length):
+
+
+#---------------增加了10个合并在一起------------------
+def merge_samples(samples, method='mean'):
+    """
+    合并一组样本（tensor shape: [merge_size, 1, 127, 500]）为一个样本（[1, 127, 500]）
+    method: 'mean', 'max', 'median'
+    """
+    if method == 'mean':
+        merged = samples.mean(dim=0, keepdim=True)
+    elif method == 'max':
+        merged, _ = samples.max(dim=0, keepdim=True)
+    elif method == 'median':
+        merged = samples.median(dim=0, keepdim=True).values
+    else:
+        raise ValueError(f"Unsupported merge method: {method}")
+    return merged
+
+
+def load_and_preprocess_data(
+    edf_file_path,
+    label_file_path,
+    stim_length,
+    do_merge=True,
+    merge_method='mean',
+    merge_size=10
+):
     edf_reader = MNEReader(filetype='edf', method='manual', length=stim_length)
     stim, target_class = ziyan_read(label_file_path)
-
-    # 将标签值减1，以使标签范围从0到49
     target_class = [cls - 1 for cls in target_class]
 
     xx = edf_reader.get_set(file_path=edf_file_path, stim_list=stim)
     if xx[-1].shape[0] != stim_length:
         xx = pad_last_array(xx, stim_length)
+
     xx_np = np.array(xx)
     logging.info(f"{os.path.basename(edf_file_path)} - xx_np.shape= {xx_np.shape}")
-
-    # # 如果通道数不是127，跳过
-    # if xx_np.shape[2] != 127:
-    #     logging.info(f"Skipping file {edf_file_path}, expected 127 channels but got {xx_np.shape[2]}.")
-    #     return None, None
-
     xx_normalized = normalize_samples(xx_np)
-    logging.info(f"{os.path.basename(edf_file_path)} - xx_normalized.shape= {xx_normalized.shape}")
 
-    eeg_data = np.transpose(xx_normalized, (0, 2, 1))
-    eeg_data = eeg_data[:, np.newaxis, :, :]
-    logging.info(f"{os.path.basename(edf_file_path)} - eeg_data.shape= {eeg_data.shape}")
+    eeg_data = np.transpose(xx_normalized, (0, 2, 1))  # [N, 127, 500]
+    eeg_data = eeg_data[:, np.newaxis, :, :]           # [N, 1, 127, 500]
 
     eeg_data_tensor = torch.tensor(eeg_data, dtype=torch.float32)
     labels_tensor = torch.tensor(target_class, dtype=torch.long)
 
-    return eeg_data_tensor, labels_tensor
+    if not do_merge:
+        logging.info(f"{os.path.basename(edf_file_path)} - No merging applied.")
+        return eeg_data_tensor, labels_tensor
 
+    # 合并逻辑
+    merged_data, merged_labels = [], []
+    i = 0
+    while i + merge_size <= len(labels_tensor):
+        block_labels = labels_tensor[i:i+merge_size]
+        if torch.all(block_labels == block_labels[0]):
+            block_data = eeg_data_tensor[i:i+merge_size]  # shape: [merge_size, 1, 127, 500]
+            merged_sample = merge_samples(block_data, method=merge_method)
+            merged_data.append(merged_sample)
+            merged_labels.append(block_labels[0].unsqueeze(0))
+            i += merge_size
+        else:
+            i += 1  # 滑动窗口前进
+
+    if len(merged_data) == 0:
+        logging.warning(f"No valid merged samples found in {edf_file_path}")
+        return None, None
+
+    merged_data_tensor = torch.cat(merged_data, dim=0)       # [N', 1, 127, 500]
+    merged_labels_tensor = torch.cat(merged_labels, dim=0)   # [N']
+
+    logging.info(f"{os.path.basename(edf_file_path)} - merged_data_tensor.shape= {merged_data_tensor.shape}")
+    return merged_data_tensor, merged_labels_tensor
+#------------------------------------------------------------------------------------------------------------
 
 def setup_logging(model_name, loss_name, n_timestep, datadirname):
     log_dir_name = f'{model_name}_{loss_name}'
@@ -202,11 +304,15 @@ def main():
 
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'New_FaceEEG'
+    datadirname = 'New_FaceEEG_merge_max'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
-    # base_path = '/data0/xinyang/SZU_Face_EEG/eeg_xy'
+
+    # base_path = '/data0/xinyang/SZU_Face_EEG/new_eeg_xy'
+
+    base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG2025_export_small'
+
     # base_path = os.path.join(base_path0, datadirname)
-    base_path = '/data0/xinyang/SZU_Face_EEG/small_new'
+    # base_path = '/data0/xinyang/SZU_Face_EEG/small_new'
     # base_path = '/data0/xinyang/SZU_Face_EEG/small_eeg'
     edf_files = find_edf_and_markers_files(base_path, file_prefix)
 
@@ -225,8 +331,19 @@ def main():
         if not os.path.exists(label_file_path):
             logging.info(f"Markers file for {edf_file_path} does not exist. Skipping.")
             continue
+        # 原始代码：
+        # eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep) #tensor[1200, 1, 127, 500]
 
-        eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep) #tensor[1200, 1, 127, 500]
+         # 不开启融合：
+        eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep, do_merge=False)
+
+        # #  开启合并（平均融合）：
+        # eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep, do_merge=True,
+        #                                              merge_method='mean')
+
+        # # #  开启合并（最大值融合）：
+        # eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep, do_merge=True,
+        #                                             merge_method='max')
         print('-------------------')
 
         if eeg_data is None or labels is None:
@@ -259,7 +376,7 @@ def main():
 
         # 实例化模型
         if model_name == 'EEGNet':
-            model = EEGNet(n_timesteps=n_timestep, n_electrodes=127, n_classes=50)
+            model = EEGNet(n_timesteps=n_timestep, n_electrodes=126, n_classes=40)
         elif model_name == 'classifier_EEGNet':
             model = classifier_EEGNet(temporal=500)
         elif model_name == 'classifier_SyncNet':
@@ -300,8 +417,8 @@ def main():
         else:
             raise ValueError(f"Unknown loss: {loss_name}")
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.001)
-        # optimizer = optim.AdamW(model.parameters(), lr=0.001)
+        optimizer = optim.Adam(model.parameters(), lr=0.00005)
+        # optimizer = optim.AdamW(model.parameters(), lr=0.0002)
 
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])
@@ -347,37 +464,50 @@ def main():
             epoch_acc = 100 * correct / total
 
             model.eval()
-            correct_test = 0
+            top1_correct = 0
+            top3_correct = 0
+            top5_correct = 0
             total_test = 0
+
             with torch.no_grad():
                 for inputs, labels in test_loader:
                     inputs, labels = inputs.to(device), labels.to(device)
-                    # # 在时间维度切片
-                    # start_time = 0
-                    # end_time = start_time + n_timestep
-                    # sliced_inputs = inputs[:, :, :, start_time:end_time]
                     with autocast():
                         outputs = model(inputs)
-                    _, predicted = torch.max(outputs, 1)
-                    total_test += labels.size(0)
-                    correct_test += (predicted == labels).sum().item()
-                test_acc = 100 * correct_test / total_test
 
-                if test_acc > best_acc:
-                    best_acc = test_acc
+                    total_test += labels.size(0)
+
+                    # Top-k accuracy
+                    _, pred = outputs.topk(5, dim=1, largest=True, sorted=True)
+                    pred = pred.t()
+                    correct = pred.eq(labels.view(1, -1).expand_as(pred))
+
+                    top1_correct += correct[:1].reshape(-1).float().sum(0, keepdim=True).item()
+                    top3_correct += correct[:3].reshape(-1).float().sum(0, keepdim=True).item()
+                    top5_correct += correct[:5].reshape(-1).float().sum(0, keepdim=True).item()
+
+                top1_acc = 100 * top1_correct / total_test
+                top3_acc = 100 * top3_correct / total_test
+                top5_acc = 100 * top5_correct / total_test
+
+                if top1_acc > best_acc:
+                    best_acc = top1_acc
                     best_epoch = epoch
 
-            epoch_end_time = time.time()  # 记录结束时间
-            epoch_duration = epoch_end_time - epoch_start_time  # 计算持续时间
+            epoch_end_time = time.time()
+            epoch_duration = epoch_end_time - epoch_start_time
 
             logging.info(
                 f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
-                f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
-                f"Epoch Duration: {epoch_duration:.2f} seconds"  # 记录时间
+                f"Top1-Test: {top1_acc:.6f}%, Top3-Test: {top3_acc:.6f}%, Top5-Test: {top5_acc:.6f}%, "
+                f"best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
+                f"Epoch Duration: {epoch_duration:.2f} seconds"
             )
+
             print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_acc:.2f}%, "
-                  f"Test Accuracy: {test_acc:.2f}%, best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
-                  f"Epoch Duration: {epoch_duration:.2f} seconds")  # 显示时间
+                  f"Top1-Test: {top1_acc:.6f}%, Top3-Test: {top3_acc:.6f}%, Top5-Test: {top5_acc:.6f}%, "
+                  f"best_acc: {best_acc:.2f}%, best_epoch: {best_epoch + 1}, "
+                  f"Epoch Duration: {epoch_duration:.2f} seconds")
 
             best_acc_list.append(best_acc)
         # # 在每个折叠结束后，手动释放内存
