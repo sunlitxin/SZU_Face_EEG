@@ -30,7 +30,37 @@ def normalize_samples(x):
     std = np.std(x, axis=1, keepdims=True)
     x_normalized = (x - mean) / (std + 1e-6)
     return x_normalized
+def normalize_samples_tensor(x: torch.Tensor) -> torch.Tensor:
+    """
+    对输入张量 x 按照 dim=1（可替换为所需维度）进行归一化。
+    x: [N, C, ...]
+    """
+    mean = x.mean(dim=2, keepdim=True)
+    std = x.std(dim=2, keepdim=True)
+    std[std == 0] = 1e-6  # 防止除以 0
+    return (x - mean) / std
 
+def normalize_eeg_per_channel(data_tensor: torch.Tensor) -> torch.Tensor:
+    """
+    对 EEG 数据进行按通道归一化（z-score 标准化），即对每个样本的每个通道，在时间维度上归一化。
+
+    参数:
+        data_tensor (torch.Tensor): 输入张量，形状为 [N, 1, C, T]，
+                                    其中 N 是样本数，C 是通道数（如127），T 是时间点数。
+
+    返回:
+        torch.Tensor: 归一化后的张量，形状不变。
+    """
+    if data_tensor.ndim != 4:
+        raise ValueError(f"输入张量维度应为 [N, 1, C, T]，但得到的是 {data_tensor.shape}")
+
+    mean = data_tensor.mean(dim=-1, keepdim=True)  # 每个样本每个通道的均值
+    std = data_tensor.std(dim=-1, keepdim=True)    # 每个样本每个通道的标准差
+
+    std[std == 0] = 1e-6  # 避免除以 0
+
+    normalized_tensor = (data_tensor - mean) / std
+    return normalized_tensor
 
 class MNEReader(object):
     def __init__(self, filetype='edf', method='stim', resample=None, length=500, exclude=(), stim_channel='auto',
@@ -216,7 +246,11 @@ def merge_samples(samples, method='mean'):
         merged = samples.median(dim=0, keepdim=True).values
     else:
         raise ValueError(f"Unsupported merge method: {method}")
+    # merged = normalize_samples_tensor(merged)  #归一化，合并之后进行，有多种归一化方式-------------------------------
+    # merged = normalize_eeg_per_channel(merged)  #归一化，合并之后进行，有多种归一化方式-------------------------------
     return merged
+
+import torch
 
 
 def load_and_preprocess_data(
@@ -304,7 +338,7 @@ def main():
 
     # Base path
     base_path0 = '/data0/xinyang/SZU_Face_EEG/'
-    datadirname = 'New_FaceEEG_merge_max'
+    datadirname = 'New_FaceEEG_merge_max_no_normal'
     # base_path = '/data0/xinyang/SZU_Face_EEG/FaceEEG/'
 
     # base_path = '/data0/xinyang/SZU_Face_EEG/new_eeg_xy'
@@ -333,7 +367,7 @@ def main():
             continue
         # 原始代码：
         # eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep) #tensor[1200, 1, 127, 500]
-
+        #
          # 不开启融合：
         eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep, do_merge=False)
 
@@ -341,7 +375,7 @@ def main():
         # eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep, do_merge=True,
         #                                              merge_method='mean')
 
-        # # #  开启合并（最大值融合）：
+        # #  开启合并（最大值融合）：
         # eeg_data, labels = load_and_preprocess_data(edf_file_path, label_file_path, stim_length=n_timestep, do_merge=True,
         #                                             merge_method='max')
         print('-------------------')
@@ -366,7 +400,7 @@ def main():
     all_labels = all_labels.to(device)
 
     kfold = KFold(n_splits=5, shuffle=True, random_state=42)
-    num_epochs = 150
+    num_epochs = 100
 
     scaler = GradScaler()
 
@@ -423,7 +457,7 @@ def main():
         train_dataset = TensorDataset(all_eeg_data[train_idx], all_labels[train_idx])
         test_dataset = TensorDataset(all_eeg_data[test_idx], all_labels[test_idx])
 
-        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
         best_acc = 0.0
