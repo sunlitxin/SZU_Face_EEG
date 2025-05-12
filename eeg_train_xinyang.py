@@ -15,7 +15,7 @@ from collections import defaultdict
 import random
 
 # ================= 设置日志 =================
-log_filename = os.path.join(os.getcwd(), 'training.log')
+log_filename = os.path.join(os.getcwd(), 'method1-training.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -37,11 +37,34 @@ def set_seed(seed=42):
 
 set_seed(42)
 
+
+# ================= 数据归一化  =================
+#method 1
+def normalize_samples(x):
+    mean = np.mean(x, axis=1)[:, np.newaxis, :]  # 对每个样本在时间维度上求均值
+    std = np.std(x, axis=1)[:, np.newaxis, :]    # 对每个样本在时间维度上求标准差
+    x_normalized = (x - mean) / (std + 1e-6)      # 标准化处理
+    return x_normalized
+#method 2 Min-Max 归一化（每个样本每个电极）
+def normalize_minmax(x):
+    min_val = np.min(x, axis=-1, keepdims=True)
+    max_val = np.max(x, axis=-1, keepdims=True)
+    return (x - min_val) / (max_val - min_val + 1e-6)
+
+
+#method 3 Z-score 跨样本归一化（对每个电极统一）
+def normalize_zscore_across_samples(x):
+    # x: [N, 1, 126, 500] - numpy.ndarray
+    mean = np.mean(x, axis=0, keepdims=True)  # [1, 1, 126, 500]
+    std = np.std(x, axis=0, keepdims=True)    # [1, 1, 126, 500]
+    return (x - mean) / (std + 1e-6)
+
+
 # ================= 自定义 Dataset =================
 class EEGDataset(Dataset):
     def __init__(self, file_path):
         data = np.load(file_path)
-        self.eeg_data = data['eeg_data']
+        self.eeg_data = normalize_samples(data['eeg_data'])
         self.labels = data['labels']
 
     def __len__(self):
@@ -49,7 +72,7 @@ class EEGDataset(Dataset):
 
     def __getitem__(self, idx):
         eeg = torch.tensor(self.eeg_data[idx], dtype=torch.float32)
-        label = torch.tensor(self.labels[idx] - 1, dtype=torch.long)
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
         return eeg, label
 
 # ================ 训练逻辑 =================
@@ -136,7 +159,7 @@ def train_with_kfold(eeg_data_dir, model_name='EEGNet', num_epochs=150, k_folds=
         model = model.to(device)
 
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=1e-3)
+        optimizer = optim.Adam(model.parameters(), lr=1e-4)
         scaler = GradScaler()
 
         best_top1 = 0.0
@@ -168,9 +191,10 @@ def train_with_kfold(eeg_data_dir, model_name='EEGNet', num_epochs=150, k_folds=
 
 # ================ 启动训练 ================
 set_seed(42)
-eeg_data_dir = '/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_eeg/all_face_eeg_shuffled.npz'
+# eeg_data_dir = '/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_eeg/all_face_eeg_0.npz'
+eeg_data_dir = '/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/raw_eeg/origin_eeg.npz'
 model_name = 'EEGNet'
-num_epochs = 100
+num_epochs = 80
 k_folds = 5
 batch_size = 128
 
