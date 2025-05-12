@@ -46,8 +46,8 @@ model_idx = 'test0'
 
 parser = argparse.ArgumentParser(description='Experiment Stimuli Recognition test with CLIP encoder')
 parser.add_argument('--dnn', default='clip', type=str)
-parser.add_argument('--epoch', default='80', type=int)
-parser.add_argument('--num_sub', default=10, type=int,
+parser.add_argument('--epoch', default='200', type=int)
+parser.add_argument('--num_sub', default=1, type=int,
                     help='number of subjects used in the experiments. ')
 parser.add_argument('-batch_size', '--batch-size', default=1000, type=int,
                     metavar='N',
@@ -180,7 +180,7 @@ class IE():
     def __init__(self, args, nsub):
         super(IE, self).__init__()
         self.args = args
-        self.num_class = 400
+        self.num_class = 40
         self.batch_size = 256
         self.batch_size_test = 400
         self.batch_size_img = 500
@@ -191,7 +191,7 @@ class IE():
 
         self.proj_dim = 256
 
-        self.lr = 0.0002
+        self.lr = 0.001
         self.b1 = 0.5
         self.b2 = 0.999
         self.nSub = nsub
@@ -225,7 +225,7 @@ class IE():
         train_data = []
         train_label = []
         test_data = []
-        test_label = np.arange(200)
+
 
         train_data = np.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_eeg/all_face_eeg.npz')
         train_data = train_data['eeg_data']
@@ -238,7 +238,7 @@ class IE():
         # test_data = np.mean(test_data, axis=1)
         # test_data = np.expand_dims(test_data, axis=1)
 
-        return train_data, test_label
+        return train_data
 
     # def get_image_data(self):
     #
@@ -254,7 +254,6 @@ class IE():
 
     def get_image_data(self):
         train_img_feature_path = '/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_img_future/clip_features_faces_new.pt'
-        test_img_feature = []
 
         # 判断文件扩展名
         if train_img_feature_path.endswith('.pt'):
@@ -262,16 +261,19 @@ class IE():
             train_img_feature = data['features']
             train_img_feature = train_img_feature.numpy() if isinstance(train_img_feature,
                                                                         torch.Tensor) else train_img_feature
+            train_labels = data['labels']
+            train_labels = train_labels.numpy() if isinstance(train_labels, torch.Tensor) else train_labels
         elif train_img_feature_path.endswith('.npz'):
             data = np.load(train_img_feature_path)
             train_img_feature = data['features']
+            train_labels = data['labels']
         else:
             raise ValueError(f"不支持的文件格式: {train_img_feature_path}")
 
         # 去除多余维度（如果有）
         train_img_feature = np.squeeze(train_img_feature)
 
-        return train_img_feature, test_img_feature
+        return train_img_feature, train_labels
     def update_lr(self, optimizer, lr):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
@@ -283,8 +285,8 @@ class IE():
         self.Proj_img.apply(weights_init_normal)
 
         # train_eeg, _, test_eeg, test_label = self.get_eeg_data()
-        train_eeg, test_label = self.get_eeg_data()
-        train_img_feature, _ = self.get_image_data()
+        train_eeg = self.get_eeg_data()
+        train_img_feature, train_labels = self.get_image_data()
         # test_center = np.load(self.test_center_path + 'center_' + self.args.dnn + '.npy', allow_pickle=True)
 
         # shuffle the training data
@@ -303,9 +305,16 @@ class IE():
         val_eeg = torch.from_numpy(train_eeg[-740:])
         train_eeg = torch.from_numpy(train_eeg[200:-740])
 
+        # 切分图像
         test_image = torch.from_numpy(train_img_feature[:200])
         val_image = torch.from_numpy(train_img_feature[-740:])
         train_image = torch.from_numpy(train_img_feature[200:-740])
+
+        # 切分标签
+        test_label = torch.from_numpy(train_labels[:200])
+        val_label = torch.from_numpy(train_labels[-740:])
+        train_label = torch.from_numpy(train_labels[200:-740])
+
 
         # val_eeg = torch.from_numpy(train_eeg[:740])
         # val_image = torch.from_numpy(train_img_feature[:740])
@@ -313,16 +322,15 @@ class IE():
         # train_eeg = torch.from_numpy(train_eeg[740:])
         # train_image = torch.from_numpy(train_img_feature[740:])
 
-        dataset = torch.utils.data.TensorDataset(train_eeg, train_image)
+        dataset = torch.utils.data.TensorDataset(train_eeg, train_image, train_label)
         self.dataloader = torch.utils.data.DataLoader(dataset=dataset, batch_size=self.batch_size, shuffle=True)
-        val_dataset = torch.utils.data.TensorDataset(val_eeg, val_image)
+        val_dataset = torch.utils.data.TensorDataset(val_eeg, val_image, val_label)
         self.val_dataloader = torch.utils.data.DataLoader(dataset=val_dataset, batch_size=self.batch_size,
                                                           shuffle=False)
         if isinstance(test_eeg, np.ndarray):
             test_eeg = torch.from_numpy(test_eeg)
         if not isinstance(test_image, torch.Tensor):
             test_image = torch.from_numpy(test_image)
-        test_center = test_image
 
         if not isinstance(test_label, torch.Tensor):
             test_label = torch.from_numpy(test_label)
@@ -348,13 +356,12 @@ class IE():
 
             # starttime_epoch = datetime.datetime.now()
 
-            for i, (eeg, img) in enumerate(self.dataloader):
+            for i, (eeg, img, label) in enumerate(self.dataloader):
                 eeg = Variable(eeg.cuda().type(self.Tensor))
                 # img = Variable(img.cuda().type(self.Tensor))
                 img_features = Variable(img.cuda().type(self.Tensor))
                 # label = Variable(label.cuda().type(self.LongTensor))
-                labels = torch.arange(eeg.shape[0])  # used for the loss
-                labels = Variable(labels.cuda().type(self.LongTensor))
+                labels = Variable(label.cuda().type(self.LongTensor))
 
                 # obtain the features
                 eeg_features = self.Enc_eeg(eeg)
@@ -389,11 +396,10 @@ class IE():
                 self.Proj_img.eval()
                 with torch.no_grad():
                     # * validation part
-                    for i, (veeg, vimg) in enumerate(self.val_dataloader):
+                    for i, (veeg, vimg, vlabels) in enumerate(self.val_dataloader):
 
                         veeg = Variable(veeg.cuda().type(self.Tensor))
                         vimg_features = Variable(vimg.cuda().type(self.Tensor))
-                        vlabels = torch.arange(veeg.shape[0])
                         vlabels = Variable(vlabels.cuda().type(self.LongTensor))
 
                         veeg_features = self.Enc_eeg(veeg)
@@ -423,13 +429,16 @@ class IE():
                 print('Epoch:', e,
                       '  Cos eeg: %.4f' % loss_eeg.detach().cpu().numpy(),
                       '  Cos img: %.4f' % loss_img.detach().cpu().numpy(),
+                      '  loss train: %.4f' % loss.detach().cpu().numpy(),
                       '  loss val: %.4f' % vloss.detach().cpu().numpy(),
                       )
                 self.log_write.write('Epoch %d: Cos eeg: %.4f, Cos img: %.4f, loss val: %.4f\n' % (
                 e, loss_eeg.detach().cpu().numpy(), loss_img.detach().cpu().numpy(), vloss.detach().cpu().numpy()))
 
         # * test part
-        all_center = test_center
+        test_center_data = torch.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_img_future/clip_class_centers.pt')
+        all_center  = test_center_data['centers']
+
         total = 0
         top1 = 0
         top3 = 0
