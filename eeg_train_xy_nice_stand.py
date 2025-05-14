@@ -340,63 +340,10 @@ class IE():
     #             new_labels.append(label)
     #
     #     return np.array(new_imgs), np.array(new_eegs), np.array(new_labels)
-    # def augment_img_eeg_features(self, imgs, eegs, labels, stack_size=10, method='mean'):
-    #     """
-    #     不放回地对同类样本进行叠加增强，图像特征与EEG保持一一对应。
-    #     图像特征从stack中随机选择一个，而不是求mean/sum。
-    #
-    #     Args:
-    #         imgs (np.ndarray): 图像特征数组，形状为 (N, D_img)
-    #         eegs (np.ndarray): EEG特征数组，形状为 (N, D_eeg)
-    #         labels (np.ndarray): 标签数组，形状为 (N,)
-    #         stack_size (int): 每组叠加样本数量
-    #         method (str): 'mean' 或 'sum'
-    #
-    #     Returns:
-    #         new_imgs (np.ndarray): 增强后的图像特征
-    #         new_eegs (np.ndarray): 增强后的EEG特征
-    #         new_labels (np.ndarray): 增强后的标签
-    #     """
-    #     assert len(imgs) == len(eegs) == len(labels), "输入维度不一致"
-    #
-    #     label_to_indices = defaultdict(list)
-    #     for idx, label in enumerate(labels):
-    #         label_to_indices[int(label)].append(idx)
-    #
-    #     new_imgs = []
-    #     new_eegs = []
-    #     new_labels = []
-    #
-    #     for label, indices in label_to_indices.items():
-    #         indices = indices.copy()
-    #         random.shuffle(indices)
-    #
-    #         while len(indices) >= stack_size:
-    #             selected_indices = [indices.pop() for _ in range(stack_size)]
-    #             eeg_stack = np.stack([eegs[i] for i in selected_indices], axis=0)
-    #
-    #             # EEG 进行 mean 或 sum
-    #             if method == 'mean':
-    #                 new_eeg = np.mean(eeg_stack, axis=0)
-    #             elif method == 'sum':
-    #                 new_eeg = np.sum(eeg_stack, axis=0)
-    #             else:
-    #                 raise ValueError("method must be 'mean' or 'sum'")
-    #
-    #             # 图像特征随机选一个
-    #             random_img_index = random.choice(selected_indices)
-    #             new_img = imgs[random_img_index]
-    #
-    #             new_imgs.append(new_img)
-    #             new_eegs.append(new_eeg)
-    #             new_labels.append(label)
-    #
-    #     return np.array(new_imgs), np.array(new_eegs), np.array(new_labels)
-
     def augment_img_eeg_features(self, imgs, eegs, labels, stack_size=10, method='mean'):
         """
-        对同类样本进行叠加增强，图像特征与EEG保持一一对应。
-        图像特征通过随机选择的 stack_size 个图像特征来计算类中心，而非整个类别的类中心。
+        不放回地对同类样本进行叠加增强，图像特征与EEG保持一一对应。
+        图像特征从stack中随机选择一个，而不是求mean/sum。
 
         Args:
             imgs (np.ndarray): 图像特征数组，形状为 (N, D_img)
@@ -426,26 +373,79 @@ class IE():
 
             while len(indices) >= stack_size:
                 selected_indices = [indices.pop() for _ in range(stack_size)]
-                img_stack = np.stack([imgs[i] for i in selected_indices], axis=0)  # [stack_size, D_img]
-                eeg_stack = np.stack([eegs[i] for i in selected_indices], axis=0)  # [stack_size, D_eeg]
+                eeg_stack = np.stack([eegs[i] for i in selected_indices], axis=0)
 
-                # 计算 stack_size 个图像的类中心并归一化
-                center = img_stack.mean(axis=0)
-                center = center / np.linalg.norm(center)  # 单位归一化
-
-                # EEG 特征融合
+                # EEG 进行 mean 或 sum
                 if method == 'mean':
-                    new_eeg = eeg_stack.mean(axis=0)
+                    new_eeg = np.mean(eeg_stack, axis=0)
                 elif method == 'sum':
-                    new_eeg = eeg_stack.sum(axis=0)
+                    new_eeg = np.sum(eeg_stack, axis=0)
                 else:
                     raise ValueError("method must be 'mean' or 'sum'")
 
-                new_imgs.append(center)  # 使用类中心作为新的图像特征
+                # 图像特征随机选一个
+                random_img_index = random.choice(selected_indices)
+                new_img = imgs[random_img_index]
+
+                new_imgs.append(new_img)
                 new_eegs.append(new_eeg)
                 new_labels.append(label)
 
         return np.array(new_imgs), np.array(new_eegs), np.array(new_labels)
+
+    # def augment_img_eeg_features(self, imgs, eegs, labels, stack_size=10, method='sum'):
+    #     """
+    #     对同类样本进行叠加增强，图像特征与EEG保持一一对应。
+    #     图像特征通过随机选择的 stack_size 个图像特征来计算类中心，而非整个类别的类中心。
+    #
+    #     Args:
+    #         imgs (np.ndarray): 图像特征数组，形状为 (N, D_img)
+    #         eegs (np.ndarray): EEG特征数组，形状为 (N, D_eeg)
+    #         labels (np.ndarray): 标签数组，形状为 (N,)
+    #         stack_size (int): 每组叠加样本数量
+    #         method (str): 'mean' 或 'sum'
+    #
+    #     Returns:
+    #         new_imgs (np.ndarray): 增强后的图像特征
+    #         new_eegs (np.ndarray): 增强后的EEG特征
+    #         new_labels (np.ndarray): 增强后的标签
+    #     """
+    #     assert len(imgs) == len(eegs) == len(labels), "输入维度不一致"
+    #
+    #     label_to_indices = defaultdict(list)
+    #     for idx, label in enumerate(labels):
+    #         label_to_indices[int(label)].append(idx)
+    #
+    #     new_imgs = []
+    #     new_eegs = []
+    #     new_labels = []
+    #
+    #     for label, indices in label_to_indices.items():
+    #         indices = indices.copy()
+    #         random.shuffle(indices)
+    #
+    #         while len(indices) >= stack_size:
+    #             selected_indices = [indices.pop() for _ in range(stack_size)]
+    #             img_stack = np.stack([imgs[i] for i in selected_indices], axis=0)  # [stack_size, D_img]
+    #             eeg_stack = np.stack([eegs[i] for i in selected_indices], axis=0)  # [stack_size, D_eeg]
+    #
+    #             # 计算 stack_size 个图像的类中心并归一化
+    #             center = img_stack.mean(axis=0)
+    #             center = center / np.linalg.norm(center)  # 单位归一化
+    #
+    #             # EEG 特征融合
+    #             if method == 'mean':
+    #                 new_eeg = eeg_stack.mean(axis=0)
+    #             elif method == 'sum':
+    #                 new_eeg = eeg_stack.sum(axis=0)
+    #             else:
+    #                 raise ValueError("method must be 'mean' or 'sum'")
+    #
+    #             new_imgs.append(center)  # 使用类中心作为新的图像特征
+    #             new_eegs.append(new_eeg)
+    #             new_labels.append(label)
+    #
+    #     return np.array(new_imgs), np.array(new_eegs), np.array(new_labels)
 
     def log(self, text):
         print(text)
@@ -458,8 +458,8 @@ class IE():
         test_data = []
 
 
-        train_data = np.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_eeg/all_face_eeg.npz')
-        # train_data = np.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/raw_eeg/origin_eeg.npz')
+        # train_data = np.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_eeg/all_face_eeg.npz')
+        train_data = np.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/raw_eeg/origin_eeg.npz')
         train_data = train_data['eeg_data']
         # train_data = np.mean(train_data, axis=1)
         # train_data = np.expand_dims(train_data, axis=1)
@@ -493,13 +493,11 @@ class IE():
             train_img_feature = data['features']
             train_img_feature = train_img_feature.numpy() if isinstance(train_img_feature,
                                                                         torch.Tensor) else train_img_feature
-            train_img_feature = np.squeeze(train_img_feature)
             train_labels = data['labels']
             train_labels = train_labels.numpy() if isinstance(train_labels, torch.Tensor) else train_labels
         elif train_img_feature_path.endswith('.npz'):
             data = np.load(train_img_feature_path)
             train_img_feature = data['features']
-            train_img_feature = np.squeeze(train_img_feature)
             train_labels = data['labels'] - 1 #  防止出现1-40,
         else:
             raise ValueError(f"不支持的文件格式: {train_img_feature_path}")
@@ -513,7 +511,7 @@ class IE():
             param_group['lr'] = lr
 
     def train(self):
-        AUG = False
+        AUG = True
         l2 = False
         self.Enc_eeg.apply(weights_init_normal)
         self.Proj_eeg.apply(weights_init_normal)
@@ -524,7 +522,7 @@ class IE():
         train_img_feature, train_labels = self.get_image_data()
         cut_num = 2000
         if AUG:
-            aug_img, aug_eeg, aug_labels = self.augment_img_eeg_features(train_img_feature, train_eeg, train_labels, stack_size=10, method='sum')
+            aug_img, aug_eeg, aug_labels = self.augment_img_eeg_features(train_img_feature, train_eeg, train_labels, stack_size=10, method='mean')
 
             if l2:
                 # L2归一化增强后的特征
@@ -682,11 +680,12 @@ class IE():
         # * test part
         test_center_data = torch.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_img_future/clip_class_centers.pt')
         all_center  = test_center_data['centers']
+        class_ids = test_center_data['class_ids']
 
+        top1_acc = 0
+        top3_acc = 0
+        top5_acc = 0
         total = 0
-        top1 = 0
-        top3 = 0
-        top5 = 0
 
         self.Enc_eeg.load_state_dict(torch.load('./model/' + model_idx + 'Enc_eeg_cls.pth'), strict=False)
         self.Proj_eeg.load_state_dict(torch.load('./model/' + model_idx + 'Proj_eeg_cls.pth'), strict=False)
@@ -705,19 +704,25 @@ class IE():
 
                 tfea = self.Proj_eeg(self.Enc_eeg(teeg))
                 tfea = tfea / tfea.norm(dim=1, keepdim=True)
-                similarity = (100.0 * tfea @ all_center.t()).softmax(dim=-1)  # no use 100?
-                _, indices = similarity.topk(5)
+                similarity = (100.0 * tfea @ all_center.t()).softmax(dim=-1)
 
-                tt_label = tlabel.view(-1, 1)
-                total += tlabel.size(0)
-                top1 += (tt_label == indices[:, :1]).sum().item()
-                top3 += (tt_label == indices[:, :3]).sum().item()
-                top5 += (tt_label == indices).sum().item()
+                # 3. 获取 top-k indices
+                topk = torch.topk(similarity, k=5, dim=1)  # 返回 top5 相似度和下标
+                topk_indices = topk.indices  # shape: [batch_size, 5]
 
-            top1_acc = float(top1) / float(total)
-            top3_acc = float(top3) / float(total)
-            top5_acc = float(top5) / float(total)
-
+                # 4. 对比每个样本的 label 和 top-k 的预测
+                for label, topk_pred in zip(tlabel, topk_indices):
+                    total += 1
+                    if label == topk_pred[0]:
+                        top1_acc += 1
+                    if label in topk_pred[:3]:
+                        top3_acc += 1
+                    if label in topk_pred[:5]:
+                        top5_acc += 1
+        # 最终精度
+        top1_acc = top1_acc / total
+        top3_acc = top3_acc / total
+        top5_acc = top5_acc / total
         self.log('The best epoch is: {}'.format(best_epoch))
         self.log('The test Top1-{:.6f}, Top3-{:.6f}, Top5-{:.6f}'.format(top1_acc, top3_acc, top5_acc))
         self.log_write.close()
