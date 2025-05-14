@@ -11,6 +11,8 @@ import random
 import itertools
 import datetime
 import time
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
 
@@ -22,8 +24,7 @@ from torch import Tensor
 
 from torch.autograd import Variable
 from einops.layers.torch import Rearrange
-
-
+from datetime import datetime
 # 固定所有随机种子
 def set_seed(seed):
     random.seed(seed)
@@ -35,7 +36,7 @@ def set_seed(seed):
 
 
 # 设定种子值
-SEED = 2023
+SEED = 2025
 set_seed(SEED)
 
 gpus = [0]
@@ -54,7 +55,7 @@ parser.add_argument('-batch_size', '--batch-size', default=1000, type=int,
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument('--seed', default=2023, type=int,
+parser.add_argument('--seed', default=2025, type=int,
                     help='seed for initializing training. ')
 
 
@@ -68,31 +69,63 @@ def weights_init_normal(m):
         init.normal_(m.weight.data, 1.0, 0.02)
         init.constant_(m.bias.data, 0.0)
 
+# #===================old AI product=======================
+# class PatchEmbedding(nn.Module):
+#     def __init__(self, emb_size=128):
+#         super().__init__()
+#         self.tsconv = nn.Sequential(
+#             nn.Conv2d(1, 64, (1, 25), stride=(1, 2)),   # [N,64,126,238]
+#             nn.BatchNorm2d(64),
+#             nn.ELU(),
+#             nn.Conv2d(64, 64, (5, 1), stride=(2, 1)),   # [N,64,61,238]
+#             nn.BatchNorm2d(64),
+#             nn.ELU(),
+#             nn.AvgPool2d((2, 5)),                      # [N,64,30,46]
+#             nn.Dropout(0.5),
+#         )
+#         self.projection = nn.Sequential(
+#             nn.Conv2d(64, emb_size, kernel_size=1),
+#             Rearrange('b e h w -> b (h w) e'),
+#         )
+#
+#     def forward(self, x):
+#         x = self.tsconv(x)
+#         x = self.projection(x)
+#         return x
+# #==================================================================
 
+#===================New MY product=======================
 class PatchEmbedding(nn.Module):
-    def __init__(self, emb_size=128):
+    def __init__(self, nc=126, nt=512, num_classes=40):
         super().__init__()
         self.tsconv = nn.Sequential(
-            nn.Conv2d(1, 64, (1, 25), stride=(1, 2)),   # [N,64,126,238]
-            nn.BatchNorm2d(64),
+            nn.Conv2d(1, 16, (1, 25), stride=(1, 1), padding=(0, 12)),   # -> (N, 16, 126, 500)
+            nn.AvgPool2d((1, 5), stride=(1, 5)),                         # -> (N, 16, 126, 100)
+            nn.BatchNorm2d(16),
             nn.ELU(),
-            nn.Conv2d(64, 64, (5, 1), stride=(2, 1)),   # [N,64,61,238]
-            nn.BatchNorm2d(64),
+            nn.Conv2d(16, 32, (nc, 1), stride=(1, 1)),                   # -> (N, 32, 1, 100)
+            nn.BatchNorm2d(32),
             nn.ELU(),
-            nn.AvgPool2d((2, 5)),                      # [N,64,30,46]
             nn.Dropout(0.5),
         )
+
+        # projection输出需要展平后维度为 512
+        # 当前输入尺寸：(N, 32, 1, 100)
+        # 我们将其压缩为：(N, 512, 1, 1)，再flatten为(N, 512)
         self.projection = nn.Sequential(
-            nn.Conv2d(64, emb_size, kernel_size=1),
-            Rearrange('b e h w -> b (h w) e'),
+            nn.Conv2d(32, 64, (1, 5), stride=(1, 2), padding=(0, 2)),     # -> (N, 64, 1, 50)
+            nn.ELU(),
+            nn.Conv2d(64, 128, (1, 5), stride=(1, 2), padding=(0, 2)),    # -> (N, 128, 1, 25)
+            nn.ELU(),
+            nn.Conv2d(128, 512, (1, 25)),                                 # -> (N, 512, 1, 1)
+            Rearrange('b c h w -> b (c h w)'),                           # -> (N, 512)
         )
 
     def forward(self, x):
         x = self.tsconv(x)
         x = self.projection(x)
         return x
-
-
+# ====================================================================
 class ResidualAdd(nn.Module):
     def __init__(self, fn):
         super().__init__()
@@ -112,9 +145,9 @@ class ResidualAdd(nn.Module):
 #     def forward(self, x, **kwargs):
 #         return self.fn(x, **kwargs) + x
 
-class FlattenHead(nn.Module):
-    def forward(self, x):
-        return x.contiguous().view(x.size(0), -1)
+# class FlattenHead(nn.Module):
+#     def forward(self, x):
+#         return x.contiguous().view(x.size(0), -1)
 
 class FlattenHead(nn.Sequential):
     def __init__(self):
@@ -126,39 +159,51 @@ class FlattenHead(nn.Sequential):
 
 
 class Enc_eeg(nn.Sequential):
-    def __init__(self, emb_size=128):
+    def __init__(self, emb_size=126):
         super().__init__(
             PatchEmbedding(emb_size),
             FlattenHead()
         )
 
-
-class Proj_eeg(nn.Module):
-    def __init__(self, input_dim=None, proj_dim=512, drop_proj=0.5):
-        super().__init__()
-        self.input_dim = input_dim
-        self.proj_dim = proj_dim
-        self.drop_proj = drop_proj
-
-        # 占位，稍后在 forward 中动态创建
-        self.net = None
-
-    def forward(self, x):
-        if self.net is None:
-            # 第一次调用时初始化网络
-            self.input_dim = x.shape[1]
-            self.net = nn.Sequential(
-                nn.Linear(self.input_dim, self.proj_dim),
-                ResidualAdd(nn.Sequential(
-                    nn.GELU(),
-                    nn.Linear(self.proj_dim, self.proj_dim),
-                    nn.Dropout(self.drop_proj),
-                )),
-                nn.LayerNorm(self.proj_dim)
-            ).to(x.device)
-        return self.net(x)
-
-
+# #===================old AI product=======================
+# class Proj_eeg(nn.Module):
+#     def __init__(self, input_dim=None, proj_dim=512, drop_proj=0.5):
+#         super().__init__()
+#         self.input_dim = input_dim
+#         self.proj_dim = proj_dim
+#         self.drop_proj = drop_proj
+#
+#         # 占位，稍后在 forward 中动态创建
+#         self.net = None
+#
+#     def forward(self, x):
+#         if self.net is None:
+#             # 第一次调用时初始化网络
+#             self.input_dim = x.shape[1]
+#             self.net = nn.Sequential(
+#                 nn.Linear(self.input_dim, self.proj_dim),
+#                 ResidualAdd(nn.Sequential(
+#                     nn.GELU(),
+#                     nn.Linear(self.proj_dim, self.proj_dim),
+#                     nn.Dropout(self.drop_proj),
+#                 )),
+#                 nn.LayerNorm(self.proj_dim)
+#             ).to(x.device)
+#         return self.net(x)
+# #===============================================================
+# #========================NEW MY product===========================
+class Proj_eeg(nn.Sequential):
+    def __init__(self, embedding_dim=512, proj_dim=512, drop_proj=0.5):
+        super().__init__(
+            nn.Linear(embedding_dim, proj_dim),
+            ResidualAdd(nn.Sequential(
+                nn.GELU(),
+                nn.Linear(proj_dim, proj_dim),
+                nn.Dropout(drop_proj),
+            )),
+            nn.LayerNorm(proj_dim),
+        )
+# #===============================================================
 
 class Proj_img(nn.Sequential):
     def __init__(self, embedding_dim=512, proj_dim=512, drop_proj=0.3):
@@ -181,8 +226,8 @@ class IE():
         super(IE, self).__init__()
         self.args = args
         self.num_class = 40
-        self.batch_size = 256
-        self.batch_size_test = 400
+        self.batch_size = 512
+        self.batch_size_test = 500
         self.batch_size_img = 500
         self.n_epochs = args.epoch
 
@@ -219,7 +264,193 @@ class IE():
 
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         self.centers = {}
+
+        # 添加日志初始化 ↓↓↓
+        log_dir = "./logs"
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.log_file_path = os.path.join(log_dir, f"MEAN_AUG(no_l2)_train_log_{timestamp}.log")
+        self.log_write = open(self.log_file_path, "a")
+
         print('initial define done.')
+
+    import numpy as np
+    from collections import defaultdict
+    import random
+    def l2_normalize(self, features, axis=1, eps=1e-8):
+        """
+        对特征进行 L2 归一化。
+
+        Args:
+            features (np.ndarray): shape (N, D)
+            axis (int): 归一化的轴
+            eps (float): 防止除0的小值
+
+        Returns:
+            np.ndarray: 归一化后的特征
+        """
+        norm = np.linalg.norm(features, axis=axis, keepdims=True)
+        return features / (norm + eps)
+    # def augment_img_eeg_features(self, imgs, eegs, labels, stack_size=10, method='mean'):
+    #     """
+    #     不放回地对同类样本进行叠加增强，图像特征与EEG保持一一对应。
+    #
+    #     Args:
+    #         imgs (np.ndarray): 图像特征数组，形状为 (N, D_img)
+    #         eegs (np.ndarray): EEG特征数组，形状为 (N, D_eeg)
+    #         labels (np.ndarray): 标签数组，形状为 (N,)
+    #         stack_size (int): 每组叠加样本数量
+    #         method (str): 'mean' 或 'sum'
+    #
+    #     Returns:
+    #         new_imgs (np.ndarray): 增强后的图像特征
+    #         new_eegs (np.ndarray): 增强后的EEG特征
+    #         new_labels (np.ndarray): 增强后的标签
+    #     """
+    #     assert len(imgs) == len(eegs) == len(labels), "输入维度不一致"
+    #
+    #     label_to_indices = defaultdict(list)
+    #     for idx, label in enumerate(labels):
+    #         label_to_indices[int(label)].append(idx)
+    #
+    #     new_imgs = []
+    #     new_eegs = []
+    #     new_labels = []
+    #
+    #     for label, indices in label_to_indices.items():
+    #         indices = indices.copy()
+    #         random.shuffle(indices)
+    #
+    #         while len(indices) >= stack_size:
+    #             selected_indices = [indices.pop() for _ in range(stack_size)]
+    #             img_stack = np.stack([imgs[i] for i in selected_indices], axis=0)
+    #             eeg_stack = np.stack([eegs[i] for i in selected_indices], axis=0)
+    #
+    #             if method == 'mean':
+    #                 new_img = np.mean(img_stack, axis=0)
+    #                 new_eeg = np.mean(eeg_stack, axis=0)
+    #             elif method == 'sum':
+    #                 new_img = np.sum(img_stack, axis=0)
+    #                 new_eeg = np.sum(eeg_stack, axis=0)
+    #             else:
+    #                 raise ValueError("method must be 'mean' or 'sum'")
+    #
+    #             new_imgs.append(new_img)
+    #             new_eegs.append(new_eeg)
+    #             new_labels.append(label)
+    #
+    #     return np.array(new_imgs), np.array(new_eegs), np.array(new_labels)
+    # def augment_img_eeg_features(self, imgs, eegs, labels, stack_size=10, method='mean'):
+    #     """
+    #     不放回地对同类样本进行叠加增强，图像特征与EEG保持一一对应。
+    #     图像特征从stack中随机选择一个，而不是求mean/sum。
+    #
+    #     Args:
+    #         imgs (np.ndarray): 图像特征数组，形状为 (N, D_img)
+    #         eegs (np.ndarray): EEG特征数组，形状为 (N, D_eeg)
+    #         labels (np.ndarray): 标签数组，形状为 (N,)
+    #         stack_size (int): 每组叠加样本数量
+    #         method (str): 'mean' 或 'sum'
+    #
+    #     Returns:
+    #         new_imgs (np.ndarray): 增强后的图像特征
+    #         new_eegs (np.ndarray): 增强后的EEG特征
+    #         new_labels (np.ndarray): 增强后的标签
+    #     """
+    #     assert len(imgs) == len(eegs) == len(labels), "输入维度不一致"
+    #
+    #     label_to_indices = defaultdict(list)
+    #     for idx, label in enumerate(labels):
+    #         label_to_indices[int(label)].append(idx)
+    #
+    #     new_imgs = []
+    #     new_eegs = []
+    #     new_labels = []
+    #
+    #     for label, indices in label_to_indices.items():
+    #         indices = indices.copy()
+    #         random.shuffle(indices)
+    #
+    #         while len(indices) >= stack_size:
+    #             selected_indices = [indices.pop() for _ in range(stack_size)]
+    #             eeg_stack = np.stack([eegs[i] for i in selected_indices], axis=0)
+    #
+    #             # EEG 进行 mean 或 sum
+    #             if method == 'mean':
+    #                 new_eeg = np.mean(eeg_stack, axis=0)
+    #             elif method == 'sum':
+    #                 new_eeg = np.sum(eeg_stack, axis=0)
+    #             else:
+    #                 raise ValueError("method must be 'mean' or 'sum'")
+    #
+    #             # 图像特征随机选一个
+    #             random_img_index = random.choice(selected_indices)
+    #             new_img = imgs[random_img_index]
+    #
+    #             new_imgs.append(new_img)
+    #             new_eegs.append(new_eeg)
+    #             new_labels.append(label)
+    #
+    #     return np.array(new_imgs), np.array(new_eegs), np.array(new_labels)
+
+    def augment_img_eeg_features(self, imgs, eegs, labels, stack_size=10, method='mean'):
+        """
+        对同类样本进行叠加增强，图像特征与EEG保持一一对应。
+        图像特征通过随机选择的 stack_size 个图像特征来计算类中心，而非整个类别的类中心。
+
+        Args:
+            imgs (np.ndarray): 图像特征数组，形状为 (N, D_img)
+            eegs (np.ndarray): EEG特征数组，形状为 (N, D_eeg)
+            labels (np.ndarray): 标签数组，形状为 (N,)
+            stack_size (int): 每组叠加样本数量
+            method (str): 'mean' 或 'sum'
+
+        Returns:
+            new_imgs (np.ndarray): 增强后的图像特征
+            new_eegs (np.ndarray): 增强后的EEG特征
+            new_labels (np.ndarray): 增强后的标签
+        """
+        assert len(imgs) == len(eegs) == len(labels), "输入维度不一致"
+
+        label_to_indices = defaultdict(list)
+        for idx, label in enumerate(labels):
+            label_to_indices[int(label)].append(idx)
+
+        new_imgs = []
+        new_eegs = []
+        new_labels = []
+
+        for label, indices in label_to_indices.items():
+            indices = indices.copy()
+            random.shuffle(indices)
+
+            while len(indices) >= stack_size:
+                selected_indices = [indices.pop() for _ in range(stack_size)]
+                img_stack = np.stack([imgs[i] for i in selected_indices], axis=0)  # [stack_size, D_img]
+                eeg_stack = np.stack([eegs[i] for i in selected_indices], axis=0)  # [stack_size, D_eeg]
+
+                # 计算 stack_size 个图像的类中心并归一化
+                center = img_stack.mean(axis=0)
+                center = center / np.linalg.norm(center)  # 单位归一化
+
+                # EEG 特征融合
+                if method == 'mean':
+                    new_eeg = eeg_stack.mean(axis=0)
+                elif method == 'sum':
+                    new_eeg = eeg_stack.sum(axis=0)
+                else:
+                    raise ValueError("method must be 'mean' or 'sum'")
+
+                new_imgs.append(center)  # 使用类中心作为新的图像特征
+                new_eegs.append(new_eeg)
+                new_labels.append(label)
+
+        return np.array(new_imgs), np.array(new_eegs), np.array(new_labels)
+
+    def log(self, text):
+        print(text)
+        self.log_write.write(text + "\n")
+        self.log_write.flush()
 
     def get_eeg_data(self):
         train_data = []
@@ -228,6 +459,7 @@ class IE():
 
 
         train_data = np.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_eeg/all_face_eeg.npz')
+        # train_data = np.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/raw_eeg/origin_eeg.npz')
         train_data = train_data['eeg_data']
         # train_data = np.mean(train_data, axis=1)
         # train_data = np.expand_dims(train_data, axis=1)
@@ -261,12 +493,14 @@ class IE():
             train_img_feature = data['features']
             train_img_feature = train_img_feature.numpy() if isinstance(train_img_feature,
                                                                         torch.Tensor) else train_img_feature
+            train_img_feature = np.squeeze(train_img_feature)
             train_labels = data['labels']
             train_labels = train_labels.numpy() if isinstance(train_labels, torch.Tensor) else train_labels
         elif train_img_feature_path.endswith('.npz'):
             data = np.load(train_img_feature_path)
             train_img_feature = data['features']
-            train_labels = data['labels']
+            train_img_feature = np.squeeze(train_img_feature)
+            train_labels = data['labels'] - 1 #  防止出现1-40,
         else:
             raise ValueError(f"不支持的文件格式: {train_img_feature_path}")
 
@@ -279,7 +513,8 @@ class IE():
             param_group['lr'] = lr
 
     def train(self):
-
+        AUG = False
+        l2 = False
         self.Enc_eeg.apply(weights_init_normal)
         self.Proj_eeg.apply(weights_init_normal)
         self.Proj_img.apply(weights_init_normal)
@@ -287,6 +522,20 @@ class IE():
         # train_eeg, _, test_eeg, test_label = self.get_eeg_data()
         train_eeg = self.get_eeg_data()
         train_img_feature, train_labels = self.get_image_data()
+        cut_num = 2000
+        if AUG:
+            aug_img, aug_eeg, aug_labels = self.augment_img_eeg_features(train_img_feature, train_eeg, train_labels, stack_size=10, method='sum')
+
+            if l2:
+                # L2归一化增强后的特征
+                train_img_feature = self.l2_normalize(aug_img)
+                train_eeg = self.l2_normalize(aug_eeg)
+            else:
+                train_img_feature = aug_img
+                train_eeg = aug_eeg
+            train_labels = aug_labels
+            cut_num = 200
+
         # test_center = np.load(self.test_center_path + 'center_' + self.args.dnn + '.npy', allow_pickle=True)
 
         # shuffle the training data
@@ -299,21 +548,22 @@ class IE():
         np.random.shuffle(indices)
         train_eeg = train_eeg[indices]
         train_img_feature = train_img_feature[indices]
+        train_labels = train_labels[indices]
 
         #切分数据集为train, val, test
-        test_eeg = torch.from_numpy(train_eeg[:200])
-        val_eeg = torch.from_numpy(train_eeg[-740:])
-        train_eeg = torch.from_numpy(train_eeg[200:-740])
+        test_eeg = torch.from_numpy(train_eeg[:cut_num])
+        val_eeg = torch.from_numpy(train_eeg[-cut_num:])
+        train_eeg = torch.from_numpy(train_eeg[cut_num:-cut_num])
 
         # 切分图像
-        test_image = torch.from_numpy(train_img_feature[:200])
-        val_image = torch.from_numpy(train_img_feature[-740:])
-        train_image = torch.from_numpy(train_img_feature[200:-740])
+        test_image = torch.from_numpy(train_img_feature[:cut_num])
+        val_image = torch.from_numpy(train_img_feature[-cut_num:])
+        train_image = torch.from_numpy(train_img_feature[cut_num:-cut_num])
 
         # 切分标签
-        test_label = torch.from_numpy(train_labels[:200])
-        val_label = torch.from_numpy(train_labels[-740:])
-        train_label = torch.from_numpy(train_labels[200:-740])
+        test_label = torch.from_numpy(train_labels[:cut_num])
+        val_label = torch.from_numpy(train_labels[-cut_num:])
+        train_label = torch.from_numpy(train_labels[cut_num:-cut_num])
 
 
         # val_eeg = torch.from_numpy(train_eeg[:740])
@@ -346,10 +596,9 @@ class IE():
 
         num = 0
         best_loss_val = np.inf
-
+        print('......Train Start......')
         for e in range(self.n_epochs):
             in_epoch = time.time()
-
             self.Enc_eeg.train()
             self.Proj_eeg.train()
             self.Proj_img.train()
@@ -426,14 +675,9 @@ class IE():
                             torch.save(self.Proj_eeg.module.state_dict(), './model/' + model_idx + 'Proj_eeg_cls.pth')
                             torch.save(self.Proj_img.module.state_dict(), './model/' + model_idx + 'Proj_img_cls.pth')
 
-                print('Epoch:', e,
-                      '  Cos eeg: %.4f' % loss_eeg.detach().cpu().numpy(),
-                      '  Cos img: %.4f' % loss_img.detach().cpu().numpy(),
-                      '  loss train: %.4f' % loss.detach().cpu().numpy(),
-                      '  loss val: %.4f' % vloss.detach().cpu().numpy(),
-                      )
-                self.log_write.write('Epoch %d: Cos eeg: %.4f, Cos img: %.4f, loss val: %.4f\n' % (
-                e, loss_eeg.detach().cpu().numpy(), loss_img.detach().cpu().numpy(), vloss.detach().cpu().numpy()))
+                self.log('Epoch: {}, Cos eeg: {:.4f}, Cos img: {:.4f}, loss train: {:.4f}, loss val: {:.4f}'.format(
+                    e, loss_eeg.item(), loss_img.item(), loss.item(), vloss.item()
+                ))
 
         # * test part
         test_center_data = torch.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_img_future/clip_class_centers.pt')
@@ -454,6 +698,7 @@ class IE():
 
         with torch.no_grad():
             for i, (teeg, tlabel) in enumerate(self.test_dataloader):
+
                 teeg = Variable(teeg.type(self.Tensor))
                 tlabel = Variable(tlabel.type(self.LongTensor))
                 all_center = Variable(all_center.type(self.Tensor))
@@ -473,10 +718,9 @@ class IE():
             top3_acc = float(top3) / float(total)
             top5_acc = float(top5) / float(total)
 
-        print('The test Top1-%.6f, Top3-%.6f, Top5-%.6f' % (top1_acc, top3_acc, top5_acc))
-        self.log_write.write('The best epoch is: %d\n' % best_epoch)
-        self.log_write.write('The test Top1-%.6f, Top3-%.6f, Top5-%.6f\n' % (top1_acc, top3_acc, top5_acc))
-
+        self.log('The best epoch is: {}'.format(best_epoch))
+        self.log('The test Top1-{:.6f}, Top3-{:.6f}, Top5-{:.6f}'.format(top1_acc, top3_acc, top5_acc))
+        self.log_write.close()
         return top1_acc, top3_acc, top5_acc
         # writer.close()
 
@@ -492,7 +736,7 @@ def main():
 
     for i in range(num_sub):
         cal_num += 1
-        starttime = datetime.datetime.now()
+        starttime = datetime.now()
         seed_n = np.random.randint(args.seed)
 
         print('seed is ' + str(seed_n))
@@ -508,7 +752,7 @@ def main():
         Acc, Acc3, Acc5 = ie.train()
         print('THE BEST ACCURACY IS ' + str(Acc))
 
-        endtime = datetime.datetime.now()
+        endtime = datetime.now()
         print('subject %d duration: ' % (i + 1) + str(endtime - starttime))
 
         aver.append(Acc)
@@ -529,3 +773,5 @@ if __name__ == "__main__":
     print(time.asctime(time.localtime(time.time())))
     main()
     print(time.asctime(time.localtime(time.time())))
+
+
