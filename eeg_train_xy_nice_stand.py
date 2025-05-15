@@ -47,7 +47,7 @@ model_idx = 'test0'
 parser = argparse.ArgumentParser(description='Experiment Stimuli Recognition test with CLIP encoder')
 parser.add_argument('--dnn', default='clip', type=str)
 parser.add_argument('--epoch', default='80', type=int)
-parser.add_argument('--num_sub', default=10, type=int,
+parser.add_argument('--num_sub', default=1, type=int,
                     help='number of subjects used in the experiments. ')
 parser.add_argument('-batch_size', '--batch-size', default=1000, type=int,
                     metavar='N',
@@ -180,7 +180,7 @@ class IE():
     def __init__(self, args, nsub):
         super(IE, self).__init__()
         self.args = args
-        self.num_class = 400
+        self.num_class = 40
         self.batch_size = 256
         self.batch_size_test = 400
         self.batch_size_img = 500
@@ -191,7 +191,7 @@ class IE():
 
         self.proj_dim = 256
 
-        self.lr = 0.0002
+        self.lr = 0.002
         self.b1 = 0.5
         self.b2 = 0.999
         self.nSub = nsub
@@ -225,7 +225,7 @@ class IE():
         train_data = []
         train_label = []
         test_data = []
-        test_label = np.arange(200)
+        test_label = np.arange(40)
 
         train_data = np.load('/data0/xinyang/train_arcface/processed_data/SZU_FACE_EEG_2025/all_eeg/all_face_eeg.npz')
         train_data = train_data['eeg_data']
@@ -291,21 +291,22 @@ class IE():
         # train_shuffle = np.random.permutation(len(train_eeg))
         # train_eeg = train_eeg[train_shuffle]
         # train_img_feature = train_img_feature[train_shuffle]
-        seed_value = 2025
-        np.random.seed(seed_value)
-        indices = np.arange(len(train_eeg))
-        np.random.shuffle(indices)
-        train_eeg = train_eeg[indices]
-        train_img_feature = train_img_feature[indices]
+
+        # seed_value = 2025
+        # np.random.seed(seed_value)
+        # indices = np.arange(len(train_eeg))
+        # np.random.shuffle(indices)
+        # train_eeg = train_eeg[indices]
+        # train_img_feature = train_img_feature[indices]
 
         #切分数据集为train, val, test
-        test_eeg = torch.from_numpy(train_eeg[:200])
+        test_eeg = torch.from_numpy(train_eeg[:40])
         val_eeg = torch.from_numpy(train_eeg[-740:])
-        train_eeg = torch.from_numpy(train_eeg[200:-740])
+        train_eeg = torch.from_numpy(train_eeg[40:-740])
 
-        test_image = torch.from_numpy(train_img_feature[:200])
+        test_image = torch.from_numpy(train_img_feature[:40])
         val_image = torch.from_numpy(train_img_feature[-740:])
-        train_image = torch.from_numpy(train_img_feature[200:-740])
+        train_image = torch.from_numpy(train_img_feature[40:-740])
 
         # val_eeg = torch.from_numpy(train_eeg[:740])
         # val_image = torch.from_numpy(train_img_feature[:740])
@@ -520,3 +521,4 @@ if __name__ == "__main__":
     print(time.asctime(time.localtime(time.time())))
     main()
     print(time.asctime(time.localtime(time.time())))
+
